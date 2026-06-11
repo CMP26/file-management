@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
+COPY frontend ./frontend
 COPY migrations ./migrations
 COPY src ./src
 RUN cargo build --release --locked
@@ -18,6 +19,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
+        curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

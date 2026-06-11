@@ -108,6 +108,40 @@ pub struct UploadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VideoOverview {
+    pub id: Uuid,
+    pub title: String,
+    pub duration_s: Option<i32>,
+    pub status: String,
+    pub error_msg: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub topic_count: i64,
+    pub question_count: i64,
+    pub has_summary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VideoListResponse {
+    pub videos: Vec<VideoOverview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VideoDetailResponse {
+    pub video: VideoOverview,
+    pub summary: Option<String>,
+    pub transcript_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct LlmStatusResponse {
+    pub base_url: String,
+    pub configured_model: String,
+    pub reachable: bool,
+    pub model_ids: Vec<String>,
+    pub error_msg: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct QuestionChoiceResponse {
     pub label: String,
     pub text: String,

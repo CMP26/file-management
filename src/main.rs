@@ -1,5 +1,11 @@
-use axum::{routing::{get, post}, Router};
-use nexalearn_backend::{assessment, config::Config, db, ingestion, llm, storage, whisper, AppState};
+use axum::{
+    extract::DefaultBodyLimit,
+    routing::{get, post},
+    Router,
+};
+use nexalearn_backend::{
+    assessment, config::Config, db, frontend, ingestion, llm, storage, videos, whisper, AppState,
+};
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -8,6 +14,9 @@ use utoipa_swagger_ui::SwaggerUi;
 #[openapi(
     paths(
         healthz,
+        nexalearn_backend::llm::handler::get_llm_status,
+        nexalearn_backend::videos::list_videos,
+        nexalearn_backend::videos::get_video,
         nexalearn_backend::ingestion::handler::upload_video,
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
@@ -17,6 +26,10 @@ use utoipa_swagger_ui::SwaggerUi;
     components(
         schemas(
             nexalearn_backend::models::UploadResponse,
+            nexalearn_backend::models::VideoOverview,
+            nexalearn_backend::models::VideoListResponse,
+            nexalearn_backend::models::VideoDetailResponse,
+            nexalearn_backend::models::LlmStatusResponse,
             nexalearn_backend::models::QuestionChoiceResponse,
             nexalearn_backend::models::QuestionResponse,
             nexalearn_backend::models::TopicQuestionGroupResponse,
@@ -32,6 +45,8 @@ use utoipa_swagger_ui::SwaggerUi;
     ),
     tags(
         (name = "Health", description = "Service health check"),
+        (name = "LLM", description = "LLM connectivity checks"),
+        (name = "Videos", description = "Video catalog and processing status"),
         (name = "Ingestion", description = "Video upload and processing"),
         (name = "Assessment", description = "Question retrieval, exam flow, grading, and justifications")
     )
@@ -59,12 +74,29 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/llm/status", get(llm::handler::get_llm_status))
+        .route("/api/videos", get(videos::list_videos))
+        .route("/api/videos/:video_id", get(videos::get_video))
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
-        .route("/api/videos/:video_id/questions", get(assessment::handler::get_video_questions))
-        .route("/api/videos/:video_id/exams/start", post(assessment::handler::start_exam_attempt))
-        .route("/api/exams/:attempt_id/submit", post(assessment::handler::submit_attempt))
-        .route("/api/exams/:attempt_id/answers/:answer_id/justification", get(assessment::handler::get_justification))
+        .route(
+            "/api/videos/:video_id/questions",
+            get(assessment::handler::get_video_questions),
+        )
+        .route(
+            "/api/videos/:video_id/exams/start",
+            post(assessment::handler::start_exam_attempt),
+        )
+        .route(
+            "/api/exams/:attempt_id/submit",
+            post(assessment::handler::submit_attempt),
+        )
+        .route(
+            "/api/exams/:attempt_id/answers/:answer_id/justification",
+            get(assessment::handler::get_justification),
+        )
+        .merge(frontend::router())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(DefaultBodyLimit::max(1024 * 1024 * 1024))
         .with_state(state);
 
     let bind_addr: std::net::SocketAddr = bind_addr.parse()?;

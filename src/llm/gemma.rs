@@ -41,6 +41,16 @@ struct ChatMessageResponse {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelInfo>,
+}
+
+#[derive(Deserialize)]
+struct ModelInfo {
+    id: String,
+}
+
 impl GemmaClient {
     pub fn new(base_url: &str, model: &str) -> Self {
         Self {
@@ -48,6 +58,26 @@ impl GemmaClient {
             model: model.to_string(),
             client: Client::new(),
         }
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub async fn list_model_ids(&self) -> AppResult<Vec<String>> {
+        let response = self
+            .client
+            .get(format!("{}/v1/models", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let parsed: ModelsResponse = response.json().await?;
+        Ok(parsed.data.into_iter().map(|model| model.id).collect())
     }
 
     pub async fn generate(&self, prompt: &str) -> AppResult<String> {

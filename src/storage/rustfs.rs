@@ -16,9 +16,12 @@ impl RustFsClient {
             .endpoint_url(&config.rustfs_endpoint)
             .load()
             .await;
+        let s3_config = aws_sdk_s3::config::Builder::from(&shared_config)
+            .force_path_style(true)
+            .build();
 
         Ok(Self {
-            inner: Client::new(&shared_config),
+            inner: Client::from_conf(s3_config),
             bucket: config.rustfs_bucket.clone(),
         })
     }

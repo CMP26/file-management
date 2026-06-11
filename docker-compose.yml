@@ -71,8 +71,8 @@ services:
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio12345
       AWS_REGION: us-east-1
-      GEMMA_BASE_URL: http://host.docker.internal:8100
-      GEMMA_MODEL: gemma3
+      GEMMA_BASE_URL: ${GEMMA_BASE_URL:-http://host.docker.internal:8100}
+      GEMMA_MODEL: ${GEMMA_MODEL:-ggml-org/gemma-4-E4B-it-GGUF}
       WHISPER_URL: http://whisper:8000
       TMP_DIR: /tmp/nexalearn
       BIND_ADDR: 0.0.0.0:8080

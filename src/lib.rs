@@ -2,11 +2,13 @@ pub mod assessment;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod frontend;
 pub mod ingestion;
 pub mod llm;
 pub mod models;
 pub mod state;
 pub mod storage;
+pub mod videos;
 pub mod whisper;
 
 pub use error::{AppError, AppResult};

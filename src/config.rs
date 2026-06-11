@@ -22,8 +22,8 @@ impl Config {
             rustfs_bucket: env_or("RUSTFS_BUCKET", "nexalearn"),
             rustfs_access_key: env_or("RUSTFS_ACCESS_KEY", "minio"),
             rustfs_secret_key: env_or("RUSTFS_SECRET_KEY", "minio12345"),
-                gemma_base_url: env_or("GEMMA_BASE_URL", "http://host.docker.internal:8100"),
-            gemma_model: env_or("GEMMA_MODEL", "gemma3"),
+            gemma_base_url: env_or("GEMMA_BASE_URL", "http://localhost:8100"),
+            gemma_model: env_or("GEMMA_MODEL", "ggml-org/gemma-4-E4B-it-GGUF"),
             whisper_url: env_or("WHISPER_URL", "http://localhost:8000"),
             tmp_dir: env_or("TMP_DIR", "/tmp/nexalearn"),
             bind_addr: env_or("BIND_ADDR", "0.0.0.0:8080"),
@@ -32,7 +32,8 @@ impl Config {
 }
 
 fn required(name: &str) -> AppResult<String> {
-    std::env::var(name).map_err(|_| AppError::bad_request(format!("missing environment variable {name}")))
+    std::env::var(name)
+        .map_err(|_| AppError::bad_request(format!("missing environment variable {name}")))
 }
 
 fn env_or(name: &str, default: &str) -> String {
