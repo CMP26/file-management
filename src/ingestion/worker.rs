@@ -1,12 +1,29 @@
 use crate::{
-    ingestion::{audio::extract_audio, question_gen::generate_questions, segmenter::chunk_segments, summarizer::summarize, topic_labeler::label_chunk},
-    models::{GeneratedChoice, GeneratedQuestion, TranscriptSegmentInput, TopicLabelResponse},
+    ingestion::{
+        audio::{create_playback_video, extract_audio},
+        question_gen::generate_essay_questions,
+        segmenter::chunk_segments,
+        summarizer::summarize,
+        topic_labeler::label_chunk,
+    },
+    models::{GeneratedQuestion, TranscriptSegmentInput},
     AppResult, AppState,
 };
 use std::path::PathBuf;
 use uuid::Uuid;
 
 pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
+    match process_video_inner(state.clone(), video_id).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let message = error.to_string();
+            let _ = update_status(&state, video_id, "failed", Some(&message)).await;
+            Err(error)
+        }
+    }
+}
+
+async fn process_video_inner(state: AppState, video_id: Uuid) -> AppResult<()> {
     let tmp_dir = PathBuf::from(&state.config.tmp_dir);
     tokio::fs::create_dir_all(&tmp_dir).await?;
 
@@ -16,11 +33,28 @@ pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
         .await?;
 
     let video_path = tmp_dir.join(format!("{video_id}.mp4"));
+    let playback_path = tmp_dir.join(format!("{video_id}.playback.mp4"));
     let wav_path = tmp_dir.join(format!("{video_id}.wav"));
 
     update_status(&state, video_id, "extracting_audio", None).await?;
     let video_bytes = state.storage.download(&original_key).await?;
     tokio::fs::write(&video_path, video_bytes).await?;
+    match create_playback_video(&video_path, &playback_path).await {
+        Ok(()) => {
+            let playback_bytes = tokio::fs::read(&playback_path).await?;
+            state
+                .storage
+                .upload(
+                    &format!("videos/{video_id}/playback.mp4"),
+                    playback_bytes,
+                    "video/mp4",
+                )
+                .await?;
+        }
+        Err(error) => {
+            tracing::warn!(video_id = %video_id, error = %error, "failed to create browser playback video");
+        }
+    }
     extract_audio(&video_path, &wav_path).await?;
 
     update_status(&state, video_id, "transcribing", None).await?;
@@ -79,14 +113,7 @@ pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
     let mut topic_records = Vec::new();
 
     for chunk in &chunks {
-        let label: TopicLabelResponse = match label_chunk(&state.gemma, &chunk.text).await {
-            Ok(value) => value,
-            Err(_) => TopicLabelResponse {
-                label: format!("Topic {}", chunk.seq_index + 1),
-                start_s: chunk.start_s,
-                end_s: chunk.end_s,
-            },
-        };
+        let label = label_chunk(&state.gemma, &chunk.text).await?;
 
         let topic_id: Uuid = sqlx::query_scalar(
             r#"
@@ -96,9 +123,9 @@ pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
             "#,
         )
         .bind(video_id)
-        .bind(&label.label)
-        .bind(label.start_s)
-        .bind(label.end_s)
+        .bind(&label)
+        .bind(chunk.start_s)
+        .bind(chunk.end_s)
         .bind(chunk.seq_index)
         .fetch_one(&state.pool)
         .await?;
@@ -106,15 +133,35 @@ pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
         topic_records.push((topic_id, label, chunk.clone()));
     }
 
-    update_status(&state, video_id, "generating_questions", None).await?;
-    for (topic_id, label, chunk) in topic_records {
-        let generated_questions = match generate_questions(&state.gemma, &label.label, &chunk.text, 3).await {
-            Ok(items) => items,
-            Err(_) => fallback_questions(&label.label),
-        };
-
-        insert_questions(&state, video_id, topic_id, generated_questions).await?;
+    if topic_records.is_empty() {
+        return Err(crate::AppError::external(
+            "no transcript chunks were available for topic/question generation",
+        ));
     }
+
+    update_status(&state, video_id, "generating_questions", None).await?;
+    let topic_context = topic_records
+        .iter()
+        .map(|(_, label, chunk)| {
+            format!(
+                "- {} ({}s-{}s)",
+                label,
+                chunk.start_s.round() as i64,
+                chunk.end_s.round() as i64
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let question_count = topic_records.len();
+    let generated_questions = generate_essay_questions(
+        &state.gemma,
+        &topic_context,
+        &transcript.full_text,
+        question_count,
+    )
+    .await?;
+    let generated_questions = normalize_essay_questions(generated_questions, question_count)?;
+    insert_topic_questions(&state, video_id, &topic_records, generated_questions).await?;
 
     update_status(&state, video_id, "summarizing", None).await?;
     let summary = summarize(&state.gemma, &transcript.full_text)
@@ -135,12 +182,18 @@ pub async fn process_video(state: AppState, video_id: Uuid) -> AppResult<()> {
     update_status(&state, video_id, "ready", None).await?;
 
     let _ = tokio::fs::remove_file(video_path).await;
+    let _ = tokio::fs::remove_file(playback_path).await;
     let _ = tokio::fs::remove_file(wav_path).await;
 
     Ok(())
 }
 
-async fn update_status(state: &AppState, video_id: Uuid, status: &str, error_msg: Option<&str>) -> AppResult<()> {
+async fn update_status(
+    state: &AppState,
+    video_id: Uuid,
+    status: &str,
+    error_msg: Option<&str>,
+) -> AppResult<()> {
     sqlx::query("UPDATE videos SET status = $1, error_msg = $2 WHERE id = $3")
         .bind(status)
         .bind(error_msg)
@@ -150,30 +203,41 @@ async fn update_status(state: &AppState, video_id: Uuid, status: &str, error_msg
     Ok(())
 }
 
-fn fallback_questions(topic_label: &str) -> Vec<GeneratedQuestion> {
-    vec![
-        GeneratedQuestion {
-            stem: format!("What is the main idea of {topic_label}?"),
-            question_type: "mcq".to_string(),
-            difficulty: "easy".to_string(),
-            rubric: None,
-            choices: Some(vec![
-                GeneratedChoice { label: "A".to_string(), text: "It describes the topic broadly.".to_string(), is_correct: true },
-                GeneratedChoice { label: "B".to_string(), text: "It is unrelated to the topic.".to_string(), is_correct: false },
-            ]),
-        },
-        GeneratedQuestion {
-            stem: format!("Explain one detail from {topic_label} in your own words."),
-            question_type: "essay".to_string(),
-            difficulty: "medium".to_string(),
-            rubric: Some("Mention the key concept and one supporting detail.".to_string()),
-            choices: None,
-        },
-    ]
+fn normalize_essay_questions(
+    questions: Vec<GeneratedQuestion>,
+    expected_count: usize,
+) -> AppResult<Vec<GeneratedQuestion>> {
+    if questions.len() != expected_count {
+        return Err(crate::AppError::external(format!(
+            "expected exactly {expected_count} essay questions, got {}",
+            questions.len(),
+        )));
+    }
+
+    Ok(questions
+        .into_iter()
+        .map(|mut question| {
+            question.question_type = "essay".to_string();
+            question.choices = None;
+            if question.difficulty.trim().is_empty() {
+                question.difficulty = "medium".to_string();
+            }
+            if question.rubric.as_deref().unwrap_or_default().trim().is_empty() {
+                question.rubric = Some("Grade for conceptual accuracy, use of relevant details from the video, and clarity of explanation.".to_string());
+            }
+            question
+        })
+        .collect())
 }
 
-async fn insert_questions(state: &AppState, video_id: Uuid, topic_id: Uuid, questions: Vec<GeneratedQuestion>) -> AppResult<()> {
-    for question in questions {
+async fn insert_topic_questions(
+    state: &AppState,
+    video_id: Uuid,
+    topic_records: &[(Uuid, String, crate::models::Chunk)],
+    questions: Vec<GeneratedQuestion>,
+) -> AppResult<()> {
+    for (index, question) in questions.into_iter().enumerate() {
+        let topic_id = topic_records.get(index).map(|(topic_id, _, _)| *topic_id);
         let question_id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO questions (video_id, topic_id, stem, question_type, difficulty, rubric)

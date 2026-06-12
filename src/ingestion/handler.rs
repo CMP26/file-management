@@ -1,5 +1,8 @@
 use crate::{models::UploadResponse, AppError, AppResult, AppState};
-use axum::{extract::{Multipart, State}, Json};
+use axum::{
+    extract::{Multipart, State},
+    Json,
+};
 use uuid::Uuid;
 
 #[utoipa::path(
@@ -13,15 +16,28 @@ use uuid::Uuid;
     )
 )]
 
-pub async fn upload_video(State(state): State<AppState>, mut multipart: Multipart) -> AppResult<Json<UploadResponse>> {
+pub async fn upload_video(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> AppResult<Json<UploadResponse>> {
     let mut title: Option<String> = None;
     let mut video_bytes: Option<Vec<u8>> = None;
+    let mut media_content_type = "application/octet-stream".to_string();
+    let mut media_extension = "bin".to_string();
 
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
             "title" => title = Some(field.text().await?),
-            "file" => video_bytes = Some(field.bytes().await?.to_vec()),
+            "file" => {
+                if let Some(content_type) = field.content_type() {
+                    media_content_type = content_type.to_string();
+                }
+                if let Some(file_name) = field.file_name() {
+                    media_extension = extension_from_filename(file_name);
+                }
+                video_bytes = Some(field.bytes().await?.to_vec());
+            }
             _ => {}
         }
     }
@@ -30,9 +46,12 @@ pub async fn upload_video(State(state): State<AppState>, mut multipart: Multipar
     let video_bytes = video_bytes.ok_or_else(|| AppError::bad_request("missing file field"))?;
 
     let video_id = Uuid::new_v4();
-    let rustfs_key = format!("videos/{video_id}/original.mp4");
+    let rustfs_key = format!("videos/{video_id}/original.{media_extension}");
 
-    state.storage.upload(&rustfs_key, video_bytes, "video/mp4").await?;
+    state
+        .storage
+        .upload(&rustfs_key, video_bytes, &media_content_type)
+        .await?;
 
     sqlx::query(
         r#"
@@ -57,4 +76,20 @@ pub async fn upload_video(State(state): State<AppState>, mut multipart: Multipar
         video_id,
         status: "pending".to_string(),
     }))
+}
+
+fn extension_from_filename(file_name: &str) -> String {
+    file_name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            extension
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .collect::<String>()
+                .to_ascii_lowercase()
+        })
+        .filter(|extension| !extension.is_empty())
+        .unwrap_or_else(|| "bin".to_string())
 }

@@ -69,6 +69,17 @@
       color: #fff;
     }
 
+    button.danger-button {
+      border-color: #f2b6b1;
+      color: var(--bad);
+    }
+
+    button.danger-button:hover {
+      border-color: var(--bad);
+      background: #fde8e7;
+      color: var(--bad);
+    }
+
     button:disabled {
       cursor: not-allowed;
       opacity: 0.5;
@@ -292,6 +303,35 @@
       padding: 4px 8px;
     }
 
+    .topic-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .topic-chip {
+      display: inline-grid;
+      gap: 2px;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 10px;
+      text-align: left;
+      white-space: normal;
+    }
+
+    .topic-chip:hover {
+      border-color: var(--accent);
+      color: var(--accent-strong);
+    }
+
+    .topic-label {
+      font-size: 13px;
+      font-weight: 750;
+    }
+
     .details {
       display: grid;
       grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
@@ -314,6 +354,73 @@
       line-height: 1.45;
       padding: 10px;
       white-space: pre-wrap;
+    }
+
+    .player-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .video-player {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101614;
+    }
+
+    .media-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .media-link {
+      color: var(--accent-strong);
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .media-link:hover {
+      text-decoration: underline;
+    }
+
+    .segment-list {
+      display: grid;
+      gap: 8px;
+      max-height: 360px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      padding: 8px;
+    }
+
+    .segment-item {
+      display: grid;
+      gap: 4px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      padding: 8px;
+      text-align: left;
+      white-space: normal;
+    }
+
+    .segment-item.active {
+      border-color: var(--accent);
+      background: #e3f3ef;
+    }
+
+    .timecode {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
     }
 
     .question-list {
@@ -402,7 +509,8 @@
 
     @media (max-width: 980px) {
       .grid,
-      .details {
+      .details,
+      .player-grid {
         grid-template-columns: 1fr;
       }
 
@@ -487,7 +595,10 @@
         <section class="panel">
           <div class="panel-header">
             <h2>Selected Video</h2>
-            <span class="status" id="selectedStatus">none</span>
+            <div class="row">
+              <span class="status" id="selectedStatus">none</span>
+              <button class="danger-button" id="deleteVideoBtn" type="button" disabled>Delete</button>
+            </div>
           </div>
           <div class="panel-body" id="detailsPanel"></div>
         </section>
@@ -551,6 +662,7 @@
       videos: [],
       selectedVideoId: null,
       selectedDetail: null,
+      transcript: null,
       questions: [],
       attemptId: null,
       lastResults: null,
@@ -572,6 +684,7 @@
       videoList: document.querySelector("#videoList"),
       videoCount: document.querySelector("#videoCount"),
       selectedStatus: document.querySelector("#selectedStatus"),
+      deleteVideoBtn: document.querySelector("#deleteVideoBtn"),
       detailsPanel: document.querySelector("#detailsPanel"),
       typeFilter: document.querySelector("#typeFilter"),
       loadQuestionsBtn: document.querySelector("#loadQuestionsBtn"),
@@ -725,9 +838,12 @@
         const detail = await api(`/api/videos/${videoId}`);
         state.selectedVideoId = videoId;
         state.selectedDetail = detail;
-        state.questions = [];
-        state.attemptId = quiet ? state.attemptId : null;
-        state.lastResults = quiet ? state.lastResults : null;
+        state.transcript = await loadTranscript(videoId);
+        if (!quiet) {
+          state.questions = [];
+          state.attemptId = null;
+          state.lastResults = null;
+        }
         renderVideos();
         renderDetails();
         if (!quiet) {
@@ -741,6 +857,15 @@
       }
     }
 
+    async function loadTranscript(videoId) {
+      try {
+        return await api(`/api/videos/${videoId}/transcript`);
+      } catch (error) {
+        log("Transcript load failed", { video_id: videoId, error: error.message });
+        return { video_id: videoId, full_text: null, segments: [] };
+      }
+    }
+
     function renderDetails() {
       const detail = state.selectedDetail;
       if (!detail) {
@@ -749,6 +874,7 @@
         el.detailsPanel.innerHTML = '<div class="empty">Select a video</div>';
         el.loadQuestionsBtn.disabled = true;
         el.startAttemptBtn.disabled = true;
+        el.deleteVideoBtn.disabled = true;
         return;
       }
 
@@ -757,8 +883,35 @@
       el.selectedStatus.className = `status ${cssToken(video.status)}`;
       el.loadQuestionsBtn.disabled = video.question_count === 0;
       el.startAttemptBtn.disabled = video.question_count === 0;
+      el.deleteVideoBtn.disabled = false;
+      const transcript = state.transcript || { segments: [] };
+      const mediaUrl = `${state.apiBase}/api/videos/${video.id}/media`;
+      const trackUrl = `${state.apiBase}/api/videos/${video.id}/transcript.vtt`;
 
       el.detailsPanel.innerHTML = `
+        <div class="player-grid">
+          <div class="artifact">
+            <video class="video-player" id="selectedVideoPlayer" controls preload="metadata" src="${escapeHtml(mediaUrl)}">
+              <track src="${escapeHtml(trackUrl)}" kind="subtitles" srclang="en" label="Transcript" default>
+            </video>
+            <div class="media-actions">
+              <a class="media-link" href="${escapeHtml(mediaUrl)}" target="_blank" rel="noreferrer">Open media</a>
+              <span class="subtle" id="playerMessage"></span>
+            </div>
+          </div>
+          <div class="artifact">
+            <h3>Transcript</h3>
+            <div class="segment-list" id="segmentList">
+              ${renderTranscriptSegments(transcript.segments || [])}
+            </div>
+          </div>
+        </div>
+        <div class="artifact">
+          <h3>Topics</h3>
+          <div class="topic-list" id="topicList">
+            ${renderTopics(detail.topics || [])}
+          </div>
+        </div>
         <div class="details">
           <div class="artifact">
             <h3>${escapeHtml(video.title)}</h3>
@@ -776,10 +929,129 @@
           </div>
           <div class="artifact">
             <h3>Transcript Preview</h3>
-            <div class="text-block">${escapeHtml(detail.transcript_preview || "Not transcribed yet")}</div>
+            <div class="text-block">${escapeHtml(transcript.full_text || detail.transcript_preview || "Not transcribed yet")}</div>
           </div>
         </div>
       `;
+      wireVideoTranscript();
+      wireTopicChips();
+    }
+
+    function renderTopics(topics) {
+      if (!topics.length) {
+        return '<div class="empty">Topics are not ready yet</div>';
+      }
+
+      return topics.map((topic) => `
+        <button class="topic-chip" type="button" data-start="${topic.start_s}" data-end="${topic.end_s}">
+          <span class="topic-label">${escapeHtml(topic.label)}</span>
+          <span class="timecode">${formatSeconds(topic.start_s)} - ${formatSeconds(topic.end_s)}</span>
+        </button>
+      `).join("");
+    }
+
+    function renderTranscriptSegments(segments) {
+      if (!segments.length) {
+        return '<div class="empty">Transcript is not ready yet</div>';
+      }
+
+      return segments.map((segment) => `
+        <button class="segment-item" type="button" data-start="${segment.start_s}" data-end="${segment.end_s}">
+          <span class="timecode">${formatSeconds(segment.start_s)} - ${formatSeconds(segment.end_s)}</span>
+          <span>${escapeHtml(segment.text)}</span>
+        </button>
+      `).join("");
+    }
+
+    function wireVideoTranscript() {
+      const player = document.querySelector("#selectedVideoPlayer");
+      const segmentList = document.querySelector("#segmentList");
+      if (!player || !segmentList) {
+        return;
+      }
+
+      const segmentButtons = Array.from(segmentList.querySelectorAll(".segment-item"));
+      const playerMessage = document.querySelector("#playerMessage");
+
+      player.addEventListener("error", () => {
+        if (playerMessage) {
+          playerMessage.textContent = "This browser could not decode the uploaded media. Try Open media or upload H.264/AAC MP4 or WebM.";
+        }
+      });
+
+      player.addEventListener("loadeddata", () => {
+        if (playerMessage) {
+          playerMessage.textContent = "";
+        }
+      });
+
+      for (const button of segmentButtons) {
+        button.addEventListener("click", () => {
+          player.currentTime = Number(button.dataset.start || 0);
+          player.play().catch(() => {});
+        });
+      }
+
+      player.addEventListener("timeupdate", () => {
+        const current = player.currentTime;
+        for (const button of segmentButtons) {
+          const start = Number(button.dataset.start || 0);
+          const end = Number(button.dataset.end || start);
+          const active = current >= start && current <= end;
+          button.classList.toggle("active", active);
+          if (active) {
+            button.scrollIntoView({ block: "nearest" });
+          }
+        }
+      });
+    }
+
+    function wireTopicChips() {
+      const player = document.querySelector("#selectedVideoPlayer");
+      const topicList = document.querySelector("#topicList");
+      if (!player || !topicList) {
+        return;
+      }
+
+      for (const button of topicList.querySelectorAll(".topic-chip")) {
+        button.addEventListener("click", () => {
+          player.currentTime = Number(button.dataset.start || 0);
+          player.play().catch(() => {});
+        });
+      }
+    }
+
+    async function deleteSelectedVideo() {
+      const detail = state.selectedDetail;
+      if (!detail) {
+        return;
+      }
+
+      const title = detail.video.title;
+      if (!confirm(`Delete "${title}" and its generated data?`)) {
+        return;
+      }
+
+      setBusy(el.deleteVideoBtn, true, "Deleting");
+      try {
+        const data = await api(`/api/videos/${detail.video.id}`, { method: "DELETE" });
+        log("Video deleted", data);
+        state.selectedVideoId = null;
+        state.selectedDetail = null;
+        state.transcript = null;
+        state.questions = [];
+        state.attemptId = null;
+        state.lastResults = null;
+        renderDetails();
+        renderQuestions();
+        renderAttempt();
+        renderResults();
+        await refreshVideos(true);
+      } catch (error) {
+        log("Delete failed", { error: error.message });
+      } finally {
+        setBusy(el.deleteVideoBtn, false);
+      }
     }
 
     async function loadQuestions() {
@@ -992,6 +1264,13 @@
       return value ? new Date(value).toLocaleString() : "";
     }
 
+    function formatSeconds(value) {
+      const totalSeconds = Math.max(0, Math.floor(Number(value) || 0));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}:${String(seconds).padStart(2, "0")}`;
+    }
+
     function escapeHtml(value) {
       return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -1006,6 +1285,7 @@
     el.refreshBtn.addEventListener("click", () => refreshVideos());
     el.autoRefresh.addEventListener("change", toggleAutoRefresh);
     el.uploadForm.addEventListener("submit", uploadVideo);
+    el.deleteVideoBtn.addEventListener("click", deleteSelectedVideo);
     el.loadQuestionsBtn.addEventListener("click", loadQuestions);
     el.startAttemptBtn.addEventListener("click", startAttempt);
     el.submitBtn.addEventListener("click", submitAnswers);

@@ -17,6 +17,10 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::llm::handler::get_llm_status,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
+        nexalearn_backend::videos::delete_video,
+        nexalearn_backend::videos::get_video_media,
+        nexalearn_backend::videos::get_video_transcript,
+        nexalearn_backend::videos::get_video_transcript_vtt,
         nexalearn_backend::ingestion::handler::upload_video,
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
@@ -28,7 +32,11 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::UploadResponse,
             nexalearn_backend::models::VideoOverview,
             nexalearn_backend::models::VideoListResponse,
+            nexalearn_backend::models::VideoTopicResponse,
             nexalearn_backend::models::VideoDetailResponse,
+            nexalearn_backend::models::DeleteVideoResponse,
+            nexalearn_backend::models::TranscriptSegmentResponse,
+            nexalearn_backend::models::VideoTranscriptResponse,
             nexalearn_backend::models::LlmStatusResponse,
             nexalearn_backend::models::QuestionChoiceResponse,
             nexalearn_backend::models::QuestionResponse,
@@ -76,7 +84,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .route("/api/llm/status", get(llm::handler::get_llm_status))
         .route("/api/videos", get(videos::list_videos))
-        .route("/api/videos/:video_id", get(videos::get_video))
+        .route(
+            "/api/videos/:video_id",
+            get(videos::get_video).delete(videos::delete_video),
+        )
+        .route("/api/videos/:video_id/media", get(videos::get_video_media))
+        .route(
+            "/api/videos/:video_id/transcript",
+            get(videos::get_video_transcript),
+        )
+        .route(
+            "/api/videos/:video_id/transcript.vtt",
+            get(videos::get_video_transcript_vtt),
+        )
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
         .route(
             "/api/videos/:video_id/questions",

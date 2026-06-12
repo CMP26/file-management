@@ -126,10 +126,41 @@ pub struct VideoListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VideoTopicResponse {
+    pub id: Uuid,
+    pub label: String,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub seq_order: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VideoDetailResponse {
     pub video: VideoOverview,
+    pub topics: Vec<VideoTopicResponse>,
     pub summary: Option<String>,
     pub transcript_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DeleteVideoResponse {
+    pub video_id: Uuid,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptSegmentResponse {
+    pub seq_index: i32,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VideoTranscriptResponse {
+    pub video_id: Uuid,
+    pub full_text: Option<String>,
+    pub segments: Vec<TranscriptSegmentResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -250,6 +281,7 @@ pub struct GeneratedChoice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedQuestion {
     pub stem: String,
+    #[serde(alias = "type")]
     pub question_type: String,
     pub difficulty: String,
     pub rubric: Option<String>,

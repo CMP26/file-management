@@ -1,11 +1,21 @@
-use crate::{models::TopicLabelResponse, AppResult};
+use crate::AppResult;
+use serde::Deserialize;
 
 pub fn prompt_for_chunk(chunk_text: &str) -> String {
     format!(
-        "Given this video transcript segment, return ONLY valid JSON (no markdown).\n\nTranscript:\n{chunk_text}\n\nJSON schema:\n{{\n  \"label\": \"short topic name (3-6 words)\",\n  \"start_s\": <float>,\n  \"end_s\": <float>\n}}"
+        "Given this video transcript segment, create a short topic name. Return ONLY valid JSON, with no markdown and no extra text.\n\nTranscript:\n{chunk_text}\n\nJSON schema:\n{{\n  \"label\": \"short topic name (3-6 words)\"\n}}"
     )
 }
 
-pub async fn label_chunk(client: &crate::llm::gemma::GemmaClient, chunk_text: &str) -> AppResult<TopicLabelResponse> {
-    client.generate_json(&prompt_for_chunk(chunk_text)).await
+#[derive(Debug, Deserialize)]
+struct TopicLabelOnly {
+    label: String,
+}
+
+pub async fn label_chunk(
+    client: &crate::llm::gemma::GemmaClient,
+    chunk_text: &str,
+) -> AppResult<String> {
+    let response: TopicLabelOnly = client.generate_json(&prompt_for_chunk(chunk_text)).await?;
+    Ok(response.label)
 }

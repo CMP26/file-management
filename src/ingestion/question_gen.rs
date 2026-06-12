@@ -1,16 +1,26 @@
 use crate::{models::GeneratedQuestion, AppResult};
 
-pub fn prompt_for_topic(topic_label: &str, chunk_text: &str, question_count: usize) -> String {
+pub fn prompt_for_essay_questions(
+    topic_context: &str,
+    transcript_text: &str,
+    question_count: usize,
+) -> String {
     format!(
-        "You are creating educational questions for a learning platform.\n\nTopic: {topic_label}\nTranscript segment:\n{chunk_text}\n\nGenerate {question_count} questions. Return ONLY valid JSON array (no markdown):\n[\n  {{\n    \"stem\": \"question text\",\n    \"type\": \"mcq\" | \"true_false\" | \"essay\",\n    \"difficulty\": \"easy\" | \"medium\" | \"hard\",\n    \"rubric\": \"grading guidance (for essay only, else null)\",\n    \"choices\": [\n      {{ \"label\": \"A\", \"text\": \"...\", \"is_correct\": false }},\n      {{ \"label\": \"B\", \"text\": \"...\", \"is_correct\": true }}\n    ]\n  }}\n]"
+        "You are creating an assessment for a learning platform.\n\nTopics:\n{topic_context}\n\nTranscript:\n{transcript_text}\n\nGenerate exactly {question_count} essay questions total: one essay question for each topic, in the same order as the Topics list. Return ONLY valid JSON array, with no markdown and no extra text. Every item must use this exact schema:\n[\n  {{\n    \"stem\": \"essay question text\",\n    \"question_type\": \"essay\",\n    \"difficulty\": \"medium\",\n    \"rubric\": \"specific grading guidance for this essay question\",\n    \"choices\": null\n  }}\n]\n\nRules:\n- Generate only essay questions.\n- Do not generate MCQ or true/false questions.\n- Return exactly {question_count} items.\n- Each question should assess its matching topic."
     )
 }
 
-pub async fn generate_questions(
+pub async fn generate_essay_questions(
     client: &crate::llm::gemma::GemmaClient,
-    topic_label: &str,
-    chunk_text: &str,
+    topic_context: &str,
+    transcript_text: &str,
     question_count: usize,
 ) -> AppResult<Vec<GeneratedQuestion>> {
-    client.generate_json(&prompt_for_topic(topic_label, chunk_text, question_count)).await
+    client
+        .generate_json(&prompt_for_essay_questions(
+            topic_context,
+            transcript_text,
+            question_count,
+        ))
+        .await
 }

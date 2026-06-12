@@ -102,6 +102,15 @@ http://localhost:8080/
 
 Use the console to upload media, refresh videos, inspect processing status, load questions, start an attempt, submit answers, and request justifications.
 
+The selected-video panel also includes:
+
+- A video player for the uploaded media
+- Transcript captions when `transcript.vtt` is ready
+- A timestamped transcript list that seeks the video when clicked
+- A delete button that removes the video row, generated database records, and stored objects
+
+During processing, the backend also creates a browser-friendly `playback.mp4` with H.264/AAC when ffmpeg can transcode the upload. Existing videos without that derivative are repaired on demand the first time the player requests media.
+
 Do not open `frontend/index.html` directly from the filesystem. The frontend should be served by the backend from `http://localhost:8080/`, otherwise browser fetches can fail.
 
 ### 5. Quick checks
@@ -122,6 +131,12 @@ Videos:
 
 ```bash
 curl http://localhost:8080/api/videos
+```
+
+Delete a video:
+
+```bash
+curl -X DELETE http://localhost:8080/api/videos/<video-id>
 ```
 
 Upload:

@@ -83,7 +83,10 @@ impl GemmaClient {
     pub async fn generate(&self, prompt: &str) -> AppResult<String> {
         let payload = ChatCompletionRequest {
             model: &self.model,
-            messages: vec![ChatMessage { role: "user", content: prompt }],
+            messages: vec![ChatMessage {
+                role: "user",
+                content: prompt,
+            }],
             temperature: Some(0.2),
             max_tokens: Some(2048),
             stream: false,
@@ -117,7 +120,7 @@ impl GemmaClient {
 
         for _attempt in 0..3 {
             let output = self.generate(prompt).await?;
-            match serde_json::from_str::<T>(&output) {
+            match parse_json_output::<T>(&output) {
                 Ok(value) => return Ok(value),
                 Err(error) => last_error = Some(error),
             }
@@ -130,4 +133,50 @@ impl GemmaClient {
                 .unwrap_or_else(|| "unknown parse failure".to_string())
         )))
     }
+}
+
+fn parse_json_output<T>(output: &str) -> Result<T, serde_json::Error>
+where
+    T: DeserializeOwned,
+{
+    let trimmed = output.trim();
+    if let Ok(value) = serde_json::from_str::<T>(trimmed) {
+        return Ok(value);
+    }
+
+    let without_fence = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+
+    if let Ok(value) = serde_json::from_str::<T>(without_fence) {
+        return Ok(value);
+    }
+
+    let first_array = without_fence.find('[');
+    let first_object = without_fence.find('{');
+    let start = match (first_array, first_object) {
+        (Some(array), Some(object)) => Some(array.min(object)),
+        (Some(array), None) => Some(array),
+        (None, Some(object)) => Some(object),
+        (None, None) => None,
+    };
+
+    if let Some(start) = start {
+        let end = without_fence
+            .rfind(']')
+            .into_iter()
+            .chain(without_fence.rfind('}'))
+            .max();
+
+        if let Some(end) = end {
+            if end > start {
+                return serde_json::from_str::<T>(&without_fence[start..=end]);
+            }
+        }
+    }
+
+    serde_json::from_str::<T>(trimmed)
 }

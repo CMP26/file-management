@@ -58,6 +58,18 @@ impl RustFsClient {
         Ok(bytes.to_vec())
     }
 
+    pub async fn delete(&self, key: &str) -> AppResult<()> {
+        self.inner
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|error| AppError::other(error.to_string()))?;
+
+        Ok(())
+    }
+
     pub async fn presigned_url(&self, key: &str, expires_in: Duration) -> AppResult<String> {
         let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(expires_in)
             .map_err(|error| AppError::other(error.to_string()))?;
