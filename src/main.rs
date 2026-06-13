@@ -4,7 +4,8 @@ use axum::{
     Router,
 };
 use nexalearn_backend::{
-    assessment, config::Config, db, frontend, ingestion, llm, storage, videos, whisper, AppState,
+    assessment, chat, config::Config, db, frontend, ingestion, llm, storage, videos, whisper,
+    AppState,
 };
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -25,7 +26,12 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
         nexalearn_backend::assessment::handler::submit_attempt,
-        nexalearn_backend::assessment::handler::get_justification
+        nexalearn_backend::assessment::handler::get_justification,
+        nexalearn_backend::chat::start_video_chat,
+        nexalearn_backend::chat::send_chat_message,
+        nexalearn_backend::chat::list_user_chats,
+        nexalearn_backend::chat::get_user_chat,
+        nexalearn_backend::chat::delete_user_chat
     ),
     components(
         schemas(
@@ -48,7 +54,17 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::SubmitAttemptRequest,
             nexalearn_backend::models::AttemptBreakdownItem,
             nexalearn_backend::models::SubmitAttemptResponse,
-            nexalearn_backend::models::JustificationResponse
+            nexalearn_backend::models::JustificationResponse,
+            nexalearn_backend::models::TranscriptChatMessage,
+            nexalearn_backend::models::StartTranscriptChatRequest,
+            nexalearn_backend::models::TranscriptChatRequest,
+            nexalearn_backend::models::TranscriptChatSource,
+            nexalearn_backend::models::TranscriptChatResponse,
+            nexalearn_backend::models::TranscriptChatMessageResponse,
+            nexalearn_backend::models::TranscriptChatHistoryResponse,
+            nexalearn_backend::models::UserChatConversationResponse,
+            nexalearn_backend::models::UserChatListResponse,
+            nexalearn_backend::models::DeleteChatResponse
         )
     ),
     tags(
@@ -56,7 +72,8 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "LLM", description = "LLM connectivity checks"),
         (name = "Videos", description = "Video catalog and processing status"),
         (name = "Ingestion", description = "Video upload and processing"),
-        (name = "Assessment", description = "Question retrieval, exam flow, grading, and justifications")
+        (name = "Assessment", description = "Question retrieval, exam flow, grading, and justifications"),
+        (name = "Chat", description = "Transcript-grounded chatbot responses")
     )
 )]
 struct ApiDoc;
@@ -96,6 +113,19 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/videos/:video_id/transcript.vtt",
             get(videos::get_video_transcript_vtt),
+        )
+        .route(
+            "/api/videos/:video_id/chats",
+            post(chat::start_video_chat),
+        )
+        .route(
+            "/api/chats/:conversation_id/messages",
+            post(chat::send_chat_message),
+        )
+        .route("/api/users/:user_id/chats", get(chat::list_user_chats))
+        .route(
+            "/api/users/:user_id/chats/:conversation_id",
+            get(chat::get_user_chat).delete(chat::delete_user_chat),
         )
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
         .route(

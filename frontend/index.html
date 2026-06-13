@@ -477,6 +477,98 @@
       padding: 10px;
     }
 
+    .chat-feed {
+      display: grid;
+      gap: 8px;
+      max-height: 300px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      padding: 10px;
+    }
+
+    .chat-message {
+      display: grid;
+      gap: 4px;
+      max-width: 86%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      line-height: 1.45;
+      padding: 9px 10px;
+      white-space: pre-wrap;
+    }
+
+    .chat-message.user {
+      justify-self: end;
+      border-color: #b8d8d2;
+      background: #e8f5f2;
+    }
+
+    .chat-message.assistant {
+      justify-self: start;
+    }
+
+    .chat-role {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .chat-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .chat-form textarea {
+      min-height: 72px;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .chat-session-list {
+      display: grid;
+      gap: 6px;
+      max-height: 150px;
+      overflow: auto;
+    }
+
+    .chat-session {
+      display: grid;
+      gap: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      padding: 8px 10px;
+      text-align: left;
+      white-space: normal;
+    }
+
+    .chat-session.active {
+      border-color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .source-item {
+      display: grid;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      padding: 8px;
+      text-align: left;
+      white-space: normal;
+    }
+
     .log {
       max-height: 240px;
       overflow: auto;
@@ -535,7 +627,8 @@
       }
 
       .split,
-      .result-item {
+      .result-item,
+      .chat-form {
         grid-template-columns: 1fr;
       }
     }
@@ -605,6 +698,31 @@
 
         <section class="panel">
           <div class="panel-header">
+            <h2>Transcript Chat</h2>
+            <button class="danger-button" id="deleteChatBtn" type="button" disabled>Delete Chat</button>
+          </div>
+          <div class="panel-body">
+            <div class="row">
+              <label style="min-width: min(100%, 300px);">
+                Chat name
+                <input id="chatNameInput" type="text" placeholder="Week 1 questions">
+              </label>
+              <button id="startChatBtn" type="button" disabled>Start Chat</button>
+              <button id="refreshChatsBtn" type="button" disabled>Refresh Chats</button>
+              <span class="subtle" id="activeChatLabel">No chat</span>
+            </div>
+            <div class="chat-session-list" id="chatSessionList"></div>
+            <div class="chat-feed" id="chatFeed"></div>
+            <form class="chat-form" id="chatForm">
+              <textarea id="chatInput" placeholder="Ask about this video"></textarea>
+              <button class="primary" id="chatSendBtn" type="submit" disabled>Send</button>
+            </form>
+            <div class="source-list" id="chatSources"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
             <h2>Questions</h2>
             <div class="row">
               <select id="typeFilter" aria-label="Question type">
@@ -657,6 +775,7 @@
 
   <script>
     const defaultApiBase = window.location.origin === "null" ? "http://localhost:8080" : window.location.origin;
+    const fixedTestUserId = "11111111-1111-4111-8111-111111111111";
     const state = {
       apiBase: defaultApiBase,
       videos: [],
@@ -666,6 +785,12 @@
       questions: [],
       attemptId: null,
       lastResults: null,
+      userChats: [],
+      chatConversationId: null,
+      chatName: "",
+      chatWaiting: false,
+      chatHistory: [],
+      chatSources: [],
       timer: null
     };
 
@@ -691,6 +816,17 @@
       userId: document.querySelector("#userId"),
       startAttemptBtn: document.querySelector("#startAttemptBtn"),
       attemptLabel: document.querySelector("#attemptLabel"),
+      chatNameInput: document.querySelector("#chatNameInput"),
+      startChatBtn: document.querySelector("#startChatBtn"),
+      refreshChatsBtn: document.querySelector("#refreshChatsBtn"),
+      deleteChatBtn: document.querySelector("#deleteChatBtn"),
+      activeChatLabel: document.querySelector("#activeChatLabel"),
+      chatSessionList: document.querySelector("#chatSessionList"),
+      chatFeed: document.querySelector("#chatFeed"),
+      chatForm: document.querySelector("#chatForm"),
+      chatInput: document.querySelector("#chatInput"),
+      chatSendBtn: document.querySelector("#chatSendBtn"),
+      chatSources: document.querySelector("#chatSources"),
       questionList: document.querySelector("#questionList"),
       submitBtn: document.querySelector("#submitBtn"),
       scoreLabel: document.querySelector("#scoreLabel"),
@@ -700,8 +836,8 @@
     };
 
     el.apiBaseLabel.textContent = state.apiBase;
-    el.userId.value = localStorage.getItem("nexalearnUserId") || crypto.randomUUID();
-    localStorage.setItem("nexalearnUserId", el.userId.value);
+    el.userId.value = fixedTestUserId;
+    el.userId.readOnly = true;
 
     function log(message, data) {
       const time = new Date().toLocaleTimeString();
@@ -844,8 +980,10 @@
           state.attemptId = null;
           state.lastResults = null;
         }
+        await loadUserChats(videoId);
         renderVideos();
         renderDetails();
+        renderChat();
         if (!quiet) {
           renderQuestions();
           renderAttempt();
@@ -875,6 +1013,7 @@
         el.loadQuestionsBtn.disabled = true;
         el.startAttemptBtn.disabled = true;
         el.deleteVideoBtn.disabled = true;
+        el.chatSendBtn.disabled = true;
         return;
       }
 
@@ -884,6 +1023,7 @@
       el.loadQuestionsBtn.disabled = video.question_count === 0;
       el.startAttemptBtn.disabled = video.question_count === 0;
       el.deleteVideoBtn.disabled = false;
+      el.chatSendBtn.disabled = !(state.transcript && state.transcript.full_text);
       const transcript = state.transcript || { segments: [] };
       const mediaUrl = `${state.apiBase}/api/videos/${video.id}/media`;
       const trackUrl = `${state.apiBase}/api/videos/${video.id}/transcript.vtt`;
@@ -1042,7 +1182,14 @@
         state.questions = [];
         state.attemptId = null;
         state.lastResults = null;
+        state.userChats = [];
+        state.chatConversationId = null;
+        state.chatName = "";
+        state.chatWaiting = false;
+        state.chatHistory = [];
+        state.chatSources = [];
         renderDetails();
+        renderChat();
         renderQuestions();
         renderAttempt();
         renderResults();
@@ -1051,6 +1198,241 @@
         log("Delete failed", { error: error.message });
       } finally {
         setBusy(el.deleteVideoBtn, false);
+      }
+    }
+
+    async function loadUserChats(videoId, preferredConversationId = null) {
+      try {
+        const data = await api(`/api/users/${el.userId.value.trim()}/chats?video_id=${encodeURIComponent(videoId)}`);
+        state.userChats = data.chats || [];
+        const nextChat = preferredConversationId
+          ? state.userChats.find((chat) => chat.conversation_id === preferredConversationId)
+          : state.userChats[0];
+        if (nextChat) {
+          await loadChat(nextChat.conversation_id);
+        } else {
+          state.chatConversationId = null;
+          state.chatName = "";
+          state.chatWaiting = false;
+          state.chatHistory = [];
+          state.chatSources = [];
+        }
+        renderChat();
+      } catch (error) {
+        state.userChats = [];
+        state.chatConversationId = null;
+        state.chatName = "";
+        state.chatWaiting = false;
+        state.chatHistory = [];
+        state.chatSources = [];
+        log("Chat list load failed", { video_id: videoId, user_id: el.userId.value.trim(), error: error.message });
+      }
+    }
+
+    async function loadChat(conversationId) {
+      try {
+        const data = await api(`/api/users/${el.userId.value.trim()}/chats/${conversationId}`);
+        state.chatConversationId = data.conversation_id;
+        state.chatName = data.name;
+        state.chatWaiting = Boolean(data.is_waiting);
+        state.chatHistory = (data.messages || []).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          sources: message.sources || [],
+          created_at: message.created_at
+        }));
+        const latestAssistant = [...state.chatHistory].reverse().find((message) => message.role === "assistant");
+        state.chatSources = latestAssistant ? latestAssistant.sources || [] : [];
+        renderChat();
+      } catch (error) {
+        state.chatConversationId = null;
+        state.chatName = "";
+        state.chatWaiting = false;
+        state.chatHistory = [];
+        state.chatSources = [];
+        log("Chat load failed", { conversation_id: conversationId, user_id: el.userId.value.trim(), error: error.message });
+      }
+    }
+
+    async function startChat() {
+      if (!state.selectedVideoId) {
+        return;
+      }
+      const name = el.chatNameInput.value.trim() || `Chat ${state.userChats.length + 1}`;
+      setBusy(el.startChatBtn, true, "Starting");
+      try {
+        const data = await api(`/api/videos/${state.selectedVideoId}/chats`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ user_id: el.userId.value.trim(), name })
+        });
+        el.chatNameInput.value = "";
+        await loadUserChats(state.selectedVideoId, data.conversation_id);
+        log("Chat started", data);
+      } catch (error) {
+        log("Chat start failed", { error: error.message });
+      } finally {
+        setBusy(el.startChatBtn, false);
+        renderChat();
+      }
+    }
+
+    async function deleteSelectedChat() {
+      if (!state.chatConversationId) {
+        return;
+      }
+      const chatName = state.chatName || shortId(state.chatConversationId);
+      if (!confirm(`Delete chat "${chatName}"?`)) {
+        return;
+      }
+      setBusy(el.deleteChatBtn, true, "Deleting");
+      try {
+        const data = await api(`/api/users/${el.userId.value.trim()}/chats/${state.chatConversationId}`, {
+          method: "DELETE"
+        });
+        log("Chat deleted", data);
+        await loadUserChats(state.selectedVideoId);
+      } catch (error) {
+        log("Chat delete failed", { error: error.message });
+      } finally {
+        setBusy(el.deleteChatBtn, false);
+        renderChat();
+      }
+    }
+
+    async function sendChat(event) {
+      event.preventDefault();
+      if (!state.selectedVideoId || !state.chatConversationId) {
+        return;
+      }
+      const message = el.chatInput.value.trim();
+      if (!message) {
+        return;
+      }
+
+      const priorHistory = state.chatHistory.slice(-8);
+      state.chatHistory.push({ role: "user", content: message });
+      state.chatSources = [];
+      state.chatWaiting = true;
+      el.chatInput.value = "";
+      renderChat();
+      setBusy(el.chatSendBtn, true, "Sending");
+
+      try {
+        const data = await api(`/api/chats/${state.chatConversationId}/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            user_id: el.userId.value.trim(),
+            message,
+            history: priorHistory
+          })
+        });
+        await loadChat(state.chatConversationId);
+        await loadUserChats(state.selectedVideoId, state.chatConversationId);
+        if (!state.chatHistory.length) {
+          state.chatHistory.push({ role: "assistant", content: data.answer, sources: data.sources || [] });
+        }
+        state.chatSources = data.sources || state.chatSources;
+        renderChat();
+        log("Transcript chat", data);
+      } catch (error) {
+        await loadChat(state.chatConversationId);
+        log("Transcript chat failed", { error: error.message });
+      } finally {
+        state.chatWaiting = false;
+        setBusy(el.chatSendBtn, false);
+        renderChat();
+      }
+    }
+
+    function renderChat() {
+      const canChat = Boolean(state.selectedVideoId);
+      const hasActiveChat = Boolean(state.chatConversationId);
+      el.startChatBtn.disabled = !canChat;
+      el.refreshChatsBtn.disabled = !state.selectedVideoId;
+      el.deleteChatBtn.disabled = !hasActiveChat || state.chatWaiting;
+      el.chatSendBtn.disabled = !(canChat && hasActiveChat) || state.chatWaiting;
+      el.chatInput.disabled = !(canChat && hasActiveChat) || state.chatWaiting;
+      el.activeChatLabel.textContent = hasActiveChat
+        ? `${state.chatName}${state.chatWaiting ? " - waiting for LLM" : ""}`
+        : "No chat";
+      renderChatSessions();
+
+      if (!state.selectedVideoId) {
+        el.chatFeed.innerHTML = '<div class="empty">Select a video</div>';
+        el.chatSources.innerHTML = "";
+        return;
+      }
+
+      if (!hasActiveChat) {
+        el.chatFeed.innerHTML = '<div class="empty">Start or select a chat</div>';
+        el.chatSources.innerHTML = "";
+        return;
+      }
+
+      if (!state.chatHistory.length) {
+        el.chatFeed.innerHTML = state.chatWaiting
+          ? '<div class="empty">Waiting for LLM response</div>'
+          : '<div class="empty">No messages</div>';
+      } else {
+        const waitingNode = state.chatWaiting
+          ? '<div class="empty">Waiting for LLM response</div>'
+          : "";
+        el.chatFeed.innerHTML = state.chatHistory.map((message) => `
+          <div class="chat-message ${message.role === "assistant" ? "assistant" : "user"}">
+            <span class="chat-role">${message.role === "assistant" ? "Assistant" : "You"}</span>
+            <span>${escapeHtml(message.content)}</span>
+          </div>
+        `).join("") + waitingNode;
+        el.chatFeed.scrollTop = el.chatFeed.scrollHeight;
+      }
+
+      if (!state.chatSources.length) {
+        el.chatSources.innerHTML = "";
+        return;
+      }
+
+      el.chatSources.innerHTML = state.chatSources.slice(0, 5).map((source) => `
+        <button class="source-item" type="button" data-start="${source.start_s}">
+          <span class="timecode">${formatSeconds(source.start_s)} - ${formatSeconds(source.end_s)}</span>
+          <span>${escapeHtml(source.text)}</span>
+        </button>
+      `).join("");
+
+      const player = document.querySelector("#selectedVideoPlayer");
+      for (const button of el.chatSources.querySelectorAll(".source-item")) {
+        button.addEventListener("click", () => {
+          if (!player) {
+            return;
+          }
+          player.currentTime = Number(button.dataset.start || 0);
+          player.play().catch(() => {});
+        });
+      }
+    }
+
+    function renderChatSessions() {
+      if (!state.selectedVideoId) {
+        el.chatSessionList.innerHTML = "";
+        return;
+      }
+
+      if (!state.userChats.length) {
+        el.chatSessionList.innerHTML = '<div class="empty">No saved chats</div>';
+        return;
+      }
+
+      el.chatSessionList.innerHTML = state.userChats.map((chat) => `
+        <button class="chat-session ${chat.conversation_id === state.chatConversationId ? "active" : ""}" type="button" data-chat-id="${chat.conversation_id}">
+          <strong>${escapeHtml(chat.name)}</strong>
+          <span class="subtle">${chat.message_count} messages - ${chat.is_waiting ? "waiting" : formatDate(chat.updated_at)}</span>
+        </button>
+      `).join("");
+
+      for (const button of el.chatSessionList.querySelectorAll(".chat-session")) {
+        button.addEventListener("click", () => loadChat(button.dataset.chatId));
       }
     }
 
@@ -1286,16 +1668,24 @@
     el.autoRefresh.addEventListener("change", toggleAutoRefresh);
     el.uploadForm.addEventListener("submit", uploadVideo);
     el.deleteVideoBtn.addEventListener("click", deleteSelectedVideo);
+    el.chatForm.addEventListener("submit", sendChat);
+    el.startChatBtn.addEventListener("click", startChat);
+    el.refreshChatsBtn.addEventListener("click", () => {
+      if (state.selectedVideoId) {
+        loadUserChats(state.selectedVideoId, state.chatConversationId);
+      }
+    });
+    el.deleteChatBtn.addEventListener("click", deleteSelectedChat);
     el.loadQuestionsBtn.addEventListener("click", loadQuestions);
     el.startAttemptBtn.addEventListener("click", startAttempt);
     el.submitBtn.addEventListener("click", submitAnswers);
     el.clearLogBtn.addEventListener("click", () => { el.log.textContent = ""; });
-    el.userId.addEventListener("change", () => localStorage.setItem("nexalearnUserId", el.userId.value.trim()));
 
     checkHealth();
     checkLlm();
     refreshVideos(true);
     renderDetails();
+    renderChat();
     renderQuestions();
     renderResults();
   </script>

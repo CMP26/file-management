@@ -151,6 +151,8 @@ Swagger UI:
 http://localhost:8080/swagger-ui
 ```
 
+For the full backend endpoint reference, request/response examples, and transcript chat API, see `BACKEND_API.md`.
+
 ### 6. Stop everything
 
 Stop the host backend with `Ctrl+C`.

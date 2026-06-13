@@ -242,6 +242,91 @@ pub struct JustificationResponse {
     pub justification: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct StartTranscriptChatRequest {
+    pub user_id: Uuid,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatRequest {
+    pub user_id: Uuid,
+    pub message: String,
+    #[serde(default)]
+    pub history: Vec<TranscriptChatMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatSource {
+    pub seq_index: i32,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatResponse {
+    pub conversation_id: Uuid,
+    pub video_id: Uuid,
+    pub name: String,
+    pub is_waiting: bool,
+    pub user_message_id: Uuid,
+    pub assistant_message_id: Uuid,
+    pub answer: String,
+    pub sources: Vec<TranscriptChatSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatMessageResponse {
+    pub id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub sources: Vec<TranscriptChatSource>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptChatHistoryResponse {
+    pub user_id: Uuid,
+    pub video_id: Uuid,
+    pub video_title: String,
+    pub conversation_id: Uuid,
+    pub name: String,
+    pub is_waiting: bool,
+    pub messages: Vec<TranscriptChatMessageResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UserChatConversationResponse {
+    pub conversation_id: Uuid,
+    pub user_id: Uuid,
+    pub video_id: Uuid,
+    pub video_title: String,
+    pub name: String,
+    pub is_waiting: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UserChatListResponse {
+    pub user_id: Uuid,
+    pub chats: Vec<UserChatConversationResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DeleteChatResponse {
+    pub conversation_id: Uuid,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscribeResponse {
     pub full_text: String,
