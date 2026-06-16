@@ -105,6 +105,7 @@ pub async fn start_video_chat(
         (status = 200, description = "Transcript-grounded chat response", body = TranscriptChatResponse),
         (status = 400, description = "Bad request"),
         (status = 404, description = "Chat not found"),
+        (status = 409, description = "Chat is already waiting for an LLM response"),
         (status = 502, description = "LLM service error")
     )
 )]
@@ -113,6 +114,8 @@ pub async fn send_chat_message(
     Path(conversation_id): Path<Uuid>,
     Json(payload): Json<TranscriptChatRequest>,
 ) -> AppResult<Json<TranscriptChatResponse>> {
+    clear_stale_waiting_chats(&state).await?;
+
     let message = payload.message.trim();
     if message.is_empty() {
         return Err(AppError::bad_request("message cannot be empty"));
@@ -124,6 +127,12 @@ pub async fn send_chat_message(
     }
 
     let conversation = conversation_context(&state, payload.user_id, conversation_id).await?;
+    if conversation.is_waiting {
+        return Err(AppError::conflict(
+            "chat is already waiting for an LLM response",
+        ));
+    }
+
     let stored_history = load_chat_messages(&state, conversation_id).await?;
     let prompt_history = if stored_history.is_empty() {
         payload.history.clone()
@@ -246,6 +255,8 @@ pub async fn list_user_chats(
     Path(user_id): Path<Uuid>,
     Query(filters): Query<ChatListFilters>,
 ) -> AppResult<Json<UserChatListResponse>> {
+    clear_stale_waiting_chats(&state).await?;
+
     let chats = match filters.video_id {
         Some(video_id) => query_user_chats(&state, user_id, Some(video_id)).await?,
         None => query_user_chats(&state, user_id, None).await?,
@@ -272,6 +283,8 @@ pub async fn get_user_chat(
     State(state): State<AppState>,
     Path((user_id, conversation_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<TranscriptChatHistoryResponse>> {
+    clear_stale_waiting_chats(&state).await?;
+
     let conversation = conversation_context(&state, user_id, conversation_id).await?;
     let messages = load_chat_messages(&state, conversation_id)
         .await?
@@ -466,6 +479,22 @@ async fn set_conversation_waiting(
         .bind(conversation_id)
         .execute(&state.pool)
         .await?;
+    Ok(())
+}
+
+async fn clear_stale_waiting_chats(state: &AppState) -> AppResult<()> {
+    let stale_after_seconds = (state.config.gemma_request_timeout_seconds * 3).max(900) as f64;
+    sqlx::query(
+        r#"
+        UPDATE chat_conversations
+        SET is_waiting = false, updated_at = now()
+        WHERE is_waiting = true
+          AND updated_at < now() - ($1 * interval '1 second')
+        "#,
+    )
+    .bind(stale_after_seconds)
+    .execute(&state.pool)
+    .await?;
     Ok(())
 }
 

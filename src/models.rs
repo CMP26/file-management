@@ -130,7 +130,6 @@ pub struct MuxImportUploadUrlResponse {
     pub video_id: Uuid,
     pub course_id: Uuid,
     pub status: String,
-    pub rustfs_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

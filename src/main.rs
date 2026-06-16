@@ -105,7 +105,12 @@ async fn main() -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
 
     let storage = storage::rustfs::RustFsClient::new(&config).await?;
-    let gemma = llm::gemma::GemmaClient::new(&config.gemma_base_url, &config.gemma_model);
+    let gemma = llm::gemma::GemmaClient::new(
+        &config.gemma_base_url,
+        &config.gemma_model,
+        config.gemma_max_concurrent_requests,
+        config.gemma_request_timeout_seconds,
+    );
     let whisper = whisper::client::WhisperClient::new(&config.whisper_url);
 
     let bind_addr = config.bind_addr.clone();

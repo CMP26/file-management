@@ -149,7 +149,7 @@ pub async fn import_mux_upload_url(
         )));
     }
 
-    let (video_id, rustfs_key) = enqueue_video(
+    let (video_id, _) = enqueue_video(
         &state,
         payload.course_id,
         title.to_string(),
@@ -163,7 +163,6 @@ pub async fn import_mux_upload_url(
         video_id,
         course_id: payload.course_id,
         status: "pending".to_string(),
-        rustfs_key,
     }))
 }
 

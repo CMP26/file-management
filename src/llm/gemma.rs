@@ -1,12 +1,15 @@
 use crate::{AppError, AppResult};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub struct GemmaClient {
     base_url: String,
     model: String,
     client: Client,
+    request_limiter: Arc<Semaphore>,
 }
 
 #[derive(Serialize)]
@@ -52,11 +55,22 @@ struct ModelInfo {
 }
 
 impl GemmaClient {
-    pub fn new(base_url: &str, model: &str) -> Self {
+    pub fn new(
+        base_url: &str,
+        model: &str,
+        max_concurrent_requests: usize,
+        request_timeout_seconds: u64,
+    ) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(request_timeout_seconds))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
-            client: Client::new(),
+            client,
+            request_limiter: Arc::new(Semaphore::new(max_concurrent_requests)),
         }
     }
 
@@ -81,6 +95,13 @@ impl GemmaClient {
     }
 
     pub async fn generate(&self, prompt: &str) -> AppResult<String> {
+        let _permit = self
+            .request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::external("gemma request queue was closed"))?;
+
         let payload = ChatCompletionRequest {
             model: &self.model,
             messages: vec![ChatMessage {

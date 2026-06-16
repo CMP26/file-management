@@ -87,8 +87,12 @@ RUSTFS_ENDPOINT=http://localhost:9000
 WHISPER_URL=http://localhost:8000
 GEMMA_BASE_URL=http://localhost:8100
 GEMMA_MODEL=ggml-org/gemma-4-E4B-it-GGUF
+GEMMA_MAX_CONCURRENT_REQUESTS=1
+GEMMA_REQUEST_TIMEOUT_SECONDS=300
 BIND_ADDR=127.0.0.1:8080
 ```
+
+`GEMMA_MAX_CONCURRENT_REQUESTS` defaults to `1` so chats, grading, summaries, and question generation wait in the backend instead of overwhelming a local llama.cpp/Gemma server with parallel generations. Increase it only if your LLM server can reliably handle concurrent requests.
 
 The backend runs migrations automatically on startup.
 

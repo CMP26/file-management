@@ -41,6 +41,8 @@ ok
 
 ## LLM
 
+The backend serializes Gemma generation requests by default to protect local llama.cpp/Gemma servers from dropped concurrent requests. Tune this with `GEMMA_MAX_CONCURRENT_REQUESTS` (default `1`) and `GEMMA_REQUEST_TIMEOUT_SECONDS` (default `300`).
+
 ### `GET /api/llm/status`
 
 Checks whether the backend can reach the configured OpenAI-compatible Gemma server.
@@ -217,8 +219,7 @@ Response:
 {
   "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
   "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
-  "status": "pending",
-  "rustfs_key": "videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/original.mp4"
+  "status": "pending"
 }
 ```
 
@@ -369,11 +370,11 @@ Response:
 
 ### `POST /api/chats/{conversation_id}/messages`
 
-Saves the user's message immediately, marks the chat as waiting for the LLM response, asks the local Gemma model, then saves the assistant response and clears the waiting state.
+Saves the user's message immediately, marks the chat as waiting for the LLM response, waits for a slot in the backend's LLM queue, asks the local Gemma model, then saves the assistant response and clears the waiting state. If the same chat is already waiting, the endpoint returns `409 Conflict` instead of starting a competing LLM request.
 
 When transcript segments are available, the backend selects relevant transcript context and returns those source segments. If the transcript is missing or the question is outside the video, the model can still answer using broader knowledge and should label that as outside-video context. The chat's stored messages are used as that chat's history/context.
 
-While the model is still generating, `GET /api/users/{user_id}/chats` and `GET /api/users/{user_id}/chats/{conversation_id}` can show `is_waiting: true`; the submitted user message is already saved at that point.
+While the model is still generating, `GET /api/users/{user_id}/chats` and `GET /api/users/{user_id}/chats/{conversation_id}` can show `is_waiting: true`; the submitted user message is already saved at that point. Stale waiting states older than the configured LLM timeout window are cleared when chats are read or a new message is submitted.
 
 Request:
 
