@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NexaLearn Test Console</title>
+  <title>NexaLearn Learning Studio</title>
   <style>
     :root {
       color-scheme: light;
@@ -390,8 +390,7 @@
     }
 
     .segment-list {
-      display: grid;
-      gap: 8px;
+      display: block;
       max-height: 360px;
       overflow: auto;
       border: 1px solid var(--line);
@@ -402,14 +401,24 @@
 
     .segment-item {
       display: grid;
-      gap: 4px;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      width: 100%;
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
       color: var(--ink);
-      padding: 8px;
+      cursor: pointer;
+      line-height: 1.55;
+      margin: 0 0 10px;
+      padding: 12px;
       text-align: left;
       white-space: normal;
+    }
+
+    .segment-item:last-child {
+      margin-bottom: 0;
     }
 
     .segment-item.active {
@@ -421,6 +430,16 @@
       color: var(--muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .segment-text {
+      min-width: 0;
+      margin: 0;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
     }
 
     .question-list {
@@ -599,15 +618,460 @@
       color: var(--good);
     }
 
+    /* Course marketplace / learning-room polish */
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --panel-soft: #f1f5f9;
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #d8dee8;
+      --accent: #1f8a70;
+      --accent-strong: #166a55;
+      --nav: #101828;
+      --nav-2: #182230;
+      --gold: #f5b942;
+      --blue: #2563eb;
+      --shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    }
+
+    body {
+      background:
+        linear-gradient(180deg, #eef2f7 0, #f8fafc 340px, #f4f6f8 100%);
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      border-radius: 7px;
+    }
+
+    button {
+      border-color: #cbd5e1;
+      font-weight: 750;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    button.primary:hover {
+      background: var(--accent-strong);
+    }
+
+    .topbar {
+      min-height: 72px;
+      border-bottom: 0;
+      background: var(--nav);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
+    }
+
+    .topbar .subtle {
+      color: #aab7c8;
+    }
+
+    .brand {
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 8px;
+      background: #1f8a70;
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      margin-right: auto;
+    }
+
+    .topnav a {
+      border-radius: 7px;
+      color: #dbe4ef;
+      font-size: 14px;
+      font-weight: 750;
+      padding: 9px 12px;
+      text-decoration: none;
+    }
+
+    .topnav a:hover {
+      background: var(--nav-2);
+      color: #fff;
+    }
+
+    .toolbar button {
+      border-color: rgba(255, 255, 255, 0.18);
+      background: #1d2939;
+      color: #eef4fb;
+    }
+
+    .toolbar button:hover {
+      border-color: #6ee7c8;
+      color: #fff;
+    }
+
+    .toolbar .choice {
+      color: #e2e8f0;
+    }
+
+    .grid {
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      gap: 20px;
+      width: min(1540px, 100%);
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 92px;
+      max-height: calc(100vh - 104px);
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .learning-column {
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 0.45fr);
+    }
+
+    .learning-column > .learning-hero,
+    .learning-column > .player-panel,
+    .learning-column > .api-panel {
+      grid-column: 1 / -1;
+    }
+
+    .panel,
+    .learning-hero {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      min-height: 56px;
+      background: #fff;
+      padding: 14px 16px;
+    }
+
+    .panel-header h2 {
+      color: #111827;
+      font-size: 16px;
+      font-weight: 850;
+    }
+
+    .panel-body {
+      gap: 14px;
+      padding: 16px;
+    }
+
+    .learning-hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 136px;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(16, 24, 40, 0.94), rgba(16, 24, 40, 0.82)),
+        repeating-linear-gradient(135deg, #1d2939 0 12px, #111827 12px 24px);
+      color: #fff;
+      padding: 24px;
+    }
+
+    .learning-hero h2 {
+      max-width: 920px;
+      color: #fff;
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 1.04;
+      overflow-wrap: anywhere;
+    }
+
+    .learning-hero p {
+      max-width: 760px;
+      margin: 10px 0 0;
+      color: #cbd5e1;
+      font-size: 15px;
+    }
+
+    .eyebrow {
+      color: #6ee7c8;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-content: flex-start;
+      justify-content: flex-end;
+    }
+
+    .course-panel .panel-body {
+      padding-top: 12px;
+    }
+
+    .video-list {
+      gap: 10px;
+      max-height: none;
+      padding-right: 0;
+    }
+
+    .course-panel .video-list,
+    .lesson-list-panel .video-list {
+      max-height: 420px;
+    }
+
+    .video-item {
+      position: relative;
+      gap: 10px;
+      border-color: #e2e8f0;
+      border-radius: 10px;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    button.video-item:hover,
+    .course-card:hover {
+      border-color: #93c5fd;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.10);
+      transform: translateY(-1px);
+    }
+
+    .video-item.active {
+      border-color: var(--accent);
+      box-shadow: inset 4px 0 0 var(--accent), 0 12px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    .course-card {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+      width: 100%;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .course-cover,
+    .lesson-thumb {
+      display: grid;
+      place-items: center;
+      min-height: 72px;
+      border-radius: 8px;
+      background:
+        linear-gradient(145deg, rgba(31, 138, 112, 0.95), rgba(37, 99, 235, 0.88)),
+        #1f2937;
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .course-cover {
+      aspect-ratio: 1 / 1;
+      font-size: 24px;
+    }
+
+    .lesson-thumb {
+      width: 78px;
+      min-height: 54px;
+      background:
+        linear-gradient(145deg, rgba(17, 24, 39, 0.96), rgba(31, 138, 112, 0.86)),
+        #111827;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .lesson-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+    }
+
+    .video-title {
+      color: #101828;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .metric {
+      border: 1px solid #dbe4ef;
+      background: #f8fafc;
+      color: #475569;
+      font-weight: 700;
+    }
+
+    .status {
+      border-radius: 7px;
+      font-size: 11px;
+      letter-spacing: 0.03em;
+    }
+
+    .player-panel {
+      overflow: visible;
+    }
+
+    .player-panel .panel-body {
+      padding: 0;
+    }
+
+    .player-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(420px, 0.68fr);
+      gap: 0;
+      align-items: stretch;
+    }
+
+    .player-grid > .artifact:first-child {
+      gap: 0;
+      background: #060b12;
+      border-radius: 0 0 0 10px;
+      padding: 16px;
+    }
+
+    .player-grid > .artifact:nth-child(2) {
+      border-left: 1px solid #e2e8f0;
+      background: #fbfcfe;
+      padding: 16px;
+    }
+
+    .video-player {
+      border: 0;
+      border-radius: 8px;
+      box-shadow: 0 18px 40px rgba(2, 6, 23, 0.32);
+    }
+
+    .media-actions {
+      margin-top: 12px;
+      color: #cbd5e1;
+    }
+
+    .media-link {
+      color: #6ee7c8;
+    }
+
+    .segment-list {
+      max-height: 488px;
+      border-color: #e2e8f0;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .segment-item {
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 16px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      padding: 14px 12px;
+    }
+
+    .segment-text {
+      color: #253041;
+      font-size: 14px;
+      line-height: 1.85;
+    }
+
+    .segment-item.active {
+      border-color: #8dd8c5;
+      background: #ecfdf5;
+    }
+
+    .details {
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 0.7fr);
+      padding: 16px;
+    }
+
+    .details > .artifact {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .text-block {
+      border-color: #e2e8f0;
+      background: #f8fafc;
+    }
+
+    .topic-chip {
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .chat-panel,
+    .practice-panel,
+    .results-panel {
+      align-self: start;
+    }
+
+    .chat-feed {
+      min-height: 320px;
+      max-height: 440px;
+      background: #f8fafc;
+    }
+
+    .chat-message {
+      border-radius: 10px;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+    }
+
+    .chat-message.user {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+    }
+
+    .question {
+      border-radius: 10px;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+    }
+
+    .topic-block {
+      border-top-color: #e2e8f0;
+    }
+
+    .result-item {
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .api-panel {
+      opacity: 0.92;
+    }
+
     @media (max-width: 980px) {
       .grid,
       .details,
-      .player-grid {
+      .player-grid,
+      .learning-column {
         grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        max-height: none;
       }
 
       .video-list {
         max-height: 360px;
+      }
+
+      .player-grid > .artifact:first-child,
+      .player-grid > .artifact:nth-child(2) {
+        border-radius: 0;
       }
     }
 
@@ -622,8 +1086,31 @@
         justify-content: flex-start;
       }
 
+      .topnav {
+        order: 3;
+        width: 100%;
+      }
+
       .grid {
         padding: 10px;
+      }
+
+      .learning-hero {
+        flex-direction: column;
+        padding: 18px;
+      }
+
+      .learning-hero h2 {
+        font-size: 28px;
+      }
+
+      .course-card,
+      .lesson-row {
+        grid-template-columns: 1fr;
+      }
+
+      .lesson-thumb {
+        width: 100%;
       }
 
       .split,
@@ -638,9 +1125,17 @@
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <h1>NexaLearn Test Console</h1>
-        <span class="subtle" id="apiBaseLabel"></span>
+        <span class="brand-mark">N</span>
+        <div>
+          <h1>NexaLearn</h1>
+          <span class="subtle" id="apiBaseLabel"></span>
+        </div>
       </div>
+      <nav class="topnav" aria-label="Primary">
+        <a href="#courses">Courses</a>
+        <a href="#lesson">Learn</a>
+        <a href="#practice">Practice</a>
+      </nav>
       <div class="toolbar">
         <span class="status" id="healthStatus">checking</span>
         <span class="status" id="llmStatus">llm</span>
@@ -655,12 +1150,35 @@
     </header>
 
     <section class="grid">
-      <aside class="column">
-        <section class="panel">
+      <aside class="column sidebar" id="courses">
+        <section class="panel course-panel">
+          <div class="panel-header">
+            <h2>Courses</h2>
+            <span class="subtle" id="courseCount">0</span>
+          </div>
+          <form class="panel-body" id="courseForm">
+            <label>
+              Course title
+              <input id="courseTitle" type="text" placeholder="Biology 101" required>
+            </label>
+            <label>
+              Description
+              <input id="courseDescription" type="text" placeholder="Optional">
+            </label>
+            <button class="primary" id="createCourseBtn" type="submit">Create Course</button>
+            <div class="video-list" id="courseList"></div>
+          </form>
+        </section>
+
+        <section class="panel upload-panel">
           <div class="panel-header">
             <h2>Upload</h2>
           </div>
           <form class="panel-body" id="uploadForm">
+            <label>
+              Course
+              <select id="uploadCourse" required></select>
+            </label>
             <label>
               Title
               <input id="videoTitle" name="title" type="text" placeholder="Lecture 01" required>
@@ -671,11 +1189,30 @@
             </label>
             <button class="primary" id="uploadBtn" type="submit">Upload</button>
           </form>
+          <form class="panel-body" id="muxImportForm" style="border-top: 1px solid var(--line);">
+            <label>
+              Course
+              <select id="muxCourse" required></select>
+            </label>
+            <label>
+              Title
+              <input id="muxTitle" type="text" placeholder="Mux lecture" required>
+            </label>
+            <label>
+              Mux video URL
+              <input id="muxUploadUrl" type="url" placeholder="https://..." required>
+            </label>
+            <label>
+              File name
+              <input id="muxFileName" type="text" placeholder="lecture.mp4">
+            </label>
+            <button class="primary" id="muxImportBtn" type="submit">Import URL</button>
+          </form>
         </section>
 
-        <section class="panel">
+        <section class="panel lesson-list-panel">
           <div class="panel-header">
-            <h2>Videos</h2>
+            <h2>Lessons</h2>
             <span class="subtle" id="videoCount">0</span>
           </div>
           <div class="panel-body">
@@ -684,19 +1221,30 @@
         </section>
       </aside>
 
-      <section class="column">
-        <section class="panel">
+      <section class="column learning-column">
+        <section class="learning-hero" id="learningHero">
+          <div>
+            <span class="eyebrow">Current lesson</span>
+            <h2 id="heroTitle">Choose a lesson</h2>
+            <p id="heroMeta">Course videos, transcript, chat, and practice live here.</p>
+          </div>
+          <div class="hero-actions">
+            <span class="status" id="selectedStatus">none</span>
+            <button class="danger-button" id="deleteVideoBtn" type="button" disabled>Delete</button>
+          </div>
+        </section>
+
+        <section class="panel player-panel" id="lesson">
           <div class="panel-header">
-            <h2>Selected Video</h2>
+            <h2>Lesson Player</h2>
             <div class="row">
-              <span class="status" id="selectedStatus">none</span>
-              <button class="danger-button" id="deleteVideoBtn" type="button" disabled>Delete</button>
+              <span class="subtle">Transcript linked</span>
             </div>
           </div>
           <div class="panel-body" id="detailsPanel"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel chat-panel">
           <div class="panel-header">
             <h2>Transcript Chat</h2>
             <button class="danger-button" id="deleteChatBtn" type="button" disabled>Delete Chat</button>
@@ -721,7 +1269,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel practice-panel" id="practice">
           <div class="panel-header">
             <h2>Questions</h2>
             <div class="row">
@@ -735,6 +1283,18 @@
             </div>
           </div>
           <div class="panel-body">
+            <div class="row">
+              <label style="min-width: min(100%, 260px);">
+                Course bank
+                <select id="courseQuestionSelect"></select>
+              </label>
+              <label style="width: 96px;">
+                Count
+                <input id="randomQuestionCount" type="number" min="1" max="100" value="10">
+              </label>
+              <button id="loadCourseQuestionsBtn" type="button" disabled>Random</button>
+              <span class="subtle" id="questionSourceLabel">Video questions</span>
+            </div>
             <div class="row">
               <label style="min-width: min(100%, 330px);">
                 User ID
@@ -750,7 +1310,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel results-panel">
           <div class="panel-header">
             <h2>Results</h2>
             <span class="subtle" id="scoreLabel"></span>
@@ -760,7 +1320,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel api-panel">
           <div class="panel-header">
             <h2>API Log</h2>
             <button id="clearLogBtn" type="button">Clear</button>
@@ -778,11 +1338,14 @@
     const fixedTestUserId = "11111111-1111-4111-8111-111111111111";
     const state = {
       apiBase: defaultApiBase,
+      courses: [],
       videos: [],
       selectedVideoId: null,
       selectedDetail: null,
       transcript: null,
       questions: [],
+      questionData: null,
+      questionMode: "video",
       attemptId: null,
       lastResults: null,
       userChats: [],
@@ -802,17 +1365,36 @@
       llmBtn: document.querySelector("#llmBtn"),
       refreshBtn: document.querySelector("#refreshBtn"),
       autoRefresh: document.querySelector("#autoRefresh"),
+      courseForm: document.querySelector("#courseForm"),
+      courseTitle: document.querySelector("#courseTitle"),
+      courseDescription: document.querySelector("#courseDescription"),
+      createCourseBtn: document.querySelector("#createCourseBtn"),
+      courseList: document.querySelector("#courseList"),
+      courseCount: document.querySelector("#courseCount"),
       uploadForm: document.querySelector("#uploadForm"),
       uploadBtn: document.querySelector("#uploadBtn"),
+      uploadCourse: document.querySelector("#uploadCourse"),
       videoTitle: document.querySelector("#videoTitle"),
       videoFile: document.querySelector("#videoFile"),
+      muxImportForm: document.querySelector("#muxImportForm"),
+      muxImportBtn: document.querySelector("#muxImportBtn"),
+      muxCourse: document.querySelector("#muxCourse"),
+      muxTitle: document.querySelector("#muxTitle"),
+      muxUploadUrl: document.querySelector("#muxUploadUrl"),
+      muxFileName: document.querySelector("#muxFileName"),
       videoList: document.querySelector("#videoList"),
       videoCount: document.querySelector("#videoCount"),
       selectedStatus: document.querySelector("#selectedStatus"),
+      heroTitle: document.querySelector("#heroTitle"),
+      heroMeta: document.querySelector("#heroMeta"),
       deleteVideoBtn: document.querySelector("#deleteVideoBtn"),
       detailsPanel: document.querySelector("#detailsPanel"),
       typeFilter: document.querySelector("#typeFilter"),
       loadQuestionsBtn: document.querySelector("#loadQuestionsBtn"),
+      courseQuestionSelect: document.querySelector("#courseQuestionSelect"),
+      randomQuestionCount: document.querySelector("#randomQuestionCount"),
+      loadCourseQuestionsBtn: document.querySelector("#loadCourseQuestionsBtn"),
+      questionSourceLabel: document.querySelector("#questionSourceLabel"),
       userId: document.querySelector("#userId"),
       startAttemptBtn: document.querySelector("#startAttemptBtn"),
       attemptLabel: document.querySelector("#attemptLabel"),
@@ -895,6 +1477,92 @@
       }
     }
 
+    async function refreshCourses(quiet = false) {
+      try {
+        const data = await api("/api/courses");
+        state.courses = data.courses || [];
+        renderCourses();
+        if (!quiet) {
+          log("Courses refreshed", data);
+        }
+      } catch (error) {
+        log("Course refresh failed", { error: error.message });
+      }
+    }
+
+    async function createCourse(event) {
+      event.preventDefault();
+      const title = el.courseTitle.value.trim();
+      const description = el.courseDescription.value.trim();
+      if (!title) {
+        return;
+      }
+
+      setBusy(el.createCourseBtn, true, "Creating");
+      try {
+        const data = await api("/api/courses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, description: description || null })
+        });
+        log("Course created", data);
+        el.courseForm.reset();
+        await refreshCourses(true);
+        setCourseSelectors(data.id);
+      } catch (error) {
+        log("Course create failed", { error: error.message });
+      } finally {
+        setBusy(el.createCourseBtn, false);
+      }
+    }
+
+    function renderCourses() {
+      el.courseCount.textContent = `${state.courses.length}`;
+      setCourseSelectors(currentCourseId());
+
+      if (!state.courses.length) {
+        el.courseList.innerHTML = '<div class="empty">No courses</div>';
+        return;
+      }
+
+      el.courseList.innerHTML = state.courses.map((course) => `
+        <div class="course-card">
+          <div class="course-cover">${escapeHtml(initials(course.title))}</div>
+          <div>
+            <div class="row" style="justify-content: space-between;">
+              <span class="video-title">${escapeHtml(course.title)}</span>
+              <span class="metric">${course.video_count} lessons</span>
+            </div>
+            <div class="subtle">${escapeHtml(course.description || "Course workspace")}</div>
+            <div class="metrics" style="margin-top: 8px;">
+              <span class="metric">${course.question_count} questions</span>
+              <span class="metric">${escapeHtml(shortId(course.id))}</span>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function setCourseSelectors(preferredId) {
+      const options = state.courses.map((course) =>
+        `<option value="${escapeHtml(course.id)}">${escapeHtml(course.title)}</option>`
+      ).join("");
+      for (const select of [el.uploadCourse, el.muxCourse, el.courseQuestionSelect]) {
+        select.innerHTML = options;
+        select.disabled = !state.courses.length;
+        if (preferredId && state.courses.some((course) => course.id === preferredId)) {
+          select.value = preferredId;
+        }
+      }
+      el.uploadBtn.disabled = !state.courses.length;
+      el.muxImportBtn.disabled = !state.courses.length;
+      el.loadCourseQuestionsBtn.disabled = !state.courses.length;
+    }
+
+    function currentCourseId() {
+      return el.courseQuestionSelect.value || el.uploadCourse.value || state.courses[0]?.id || "";
+    }
+
     async function refreshVideos(quiet = false) {
       try {
         const data = await api("/api/videos");
@@ -914,10 +1582,12 @@
     async function uploadVideo(event) {
       event.preventDefault();
       const file = el.videoFile.files[0];
-      if (!file) {
+      const courseId = el.uploadCourse.value;
+      if (!file || !courseId) {
         return;
       }
       const form = new FormData();
+      form.append("course_id", courseId);
       form.append("title", el.videoTitle.value.trim() || file.name);
       form.append("file", file);
 
@@ -939,6 +1609,40 @@
       }
     }
 
+    async function importMuxUrl(event) {
+      event.preventDefault();
+      const title = el.muxTitle.value.trim();
+      const courseId = el.muxCourse.value;
+      const uploadUrl = el.muxUploadUrl.value.trim();
+      const fileName = el.muxFileName.value.trim();
+      if (!title || !courseId || !uploadUrl) {
+        return;
+      }
+
+      setBusy(el.muxImportBtn, true, "Importing");
+      try {
+        const data = await api("/api/mux/import-upload-url", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            title,
+            course_id: courseId,
+            upload_url: uploadUrl,
+            file_name: fileName || null
+          })
+        });
+        log("Mux URL import queued", data);
+        state.selectedVideoId = data.video_id;
+        el.muxImportForm.reset();
+        await refreshVideos(true);
+        await selectVideo(data.video_id);
+      } catch (error) {
+        log("Mux URL import failed", { error: error.message });
+      } finally {
+        setBusy(el.muxImportBtn, false);
+      }
+    }
+
     function renderVideos() {
       el.videoCount.textContent = `${state.videos.length}`;
       if (!state.videos.length) {
@@ -952,15 +1656,20 @@
         button.type = "button";
         button.className = `video-item ${video.id === state.selectedVideoId ? "active" : ""}`;
         button.innerHTML = `
-          <div class="row" style="justify-content: space-between;">
-            <span class="video-title"></span>
-            <span class="status ${cssToken(video.status)}">${escapeHtml(video.status)}</span>
-          </div>
-          <div class="subtle">${escapeHtml(shortId(video.id))} - ${formatDate(video.created_at)}</div>
-          <div class="metrics">
-            <span class="metric">${video.topic_count} topics</span>
-            <span class="metric">${video.question_count} questions</span>
-            <span class="metric">${video.has_summary ? "summary" : "no summary"}</span>
+          <div class="lesson-row">
+            <div class="lesson-thumb">${escapeHtml(formatLessonNumber(video))}</div>
+            <div>
+              <div class="row" style="justify-content: space-between;">
+                <span class="video-title"></span>
+                <span class="status ${cssToken(video.status)}">${escapeHtml(video.status)}</span>
+              </div>
+              <div class="subtle">${escapeHtml(video.course_title || "No course")} - ${formatDate(video.created_at)}</div>
+              <div class="metrics" style="margin-top: 8px;">
+                <span class="metric">${video.topic_count} topics</span>
+                <span class="metric">${video.question_count} questions</span>
+                <span class="metric">${video.has_summary ? "summary" : "no summary"}</span>
+              </div>
+            </div>
           </div>
         `;
         button.querySelector(".video-title").textContent = video.title;
@@ -977,6 +1686,8 @@
         state.transcript = await loadTranscript(videoId);
         if (!quiet) {
           state.questions = [];
+          state.questionData = null;
+          state.questionMode = "video";
           state.attemptId = null;
           state.lastResults = null;
         }
@@ -1009,6 +1720,8 @@
       if (!detail) {
         el.selectedStatus.textContent = "none";
         el.selectedStatus.className = "status";
+        el.heroTitle.textContent = "Choose a lesson";
+        el.heroMeta.textContent = "Course videos, transcript, chat, and practice live here.";
         el.detailsPanel.innerHTML = '<div class="empty">Select a video</div>';
         el.loadQuestionsBtn.disabled = true;
         el.startAttemptBtn.disabled = true;
@@ -1020,6 +1733,8 @@
       const video = detail.video;
       el.selectedStatus.textContent = video.status;
       el.selectedStatus.className = `status ${cssToken(video.status)}`;
+      el.heroTitle.textContent = video.title;
+      el.heroMeta.textContent = `${video.course_title || "Course"} - ${video.topic_count} topics - ${video.question_count} questions`;
       el.loadQuestionsBtn.disabled = video.question_count === 0;
       el.startAttemptBtn.disabled = video.question_count === 0;
       el.deleteVideoBtn.disabled = false;
@@ -1057,6 +1772,7 @@
             <h3>${escapeHtml(video.title)}</h3>
             <div class="metrics">
               <span class="metric">${escapeHtml(video.id)}</span>
+              <span class="metric">${escapeHtml(video.course_title || "No course")}</span>
               <span class="metric">${video.topic_count} topics</span>
               <span class="metric">${video.question_count} questions</span>
               <span class="metric">${formatDate(video.created_at)}</span>
@@ -1096,10 +1812,10 @@
       }
 
       return segments.map((segment) => `
-        <button class="segment-item" type="button" data-start="${segment.start_s}" data-end="${segment.end_s}">
-          <span class="timecode">${formatSeconds(segment.start_s)} - ${formatSeconds(segment.end_s)}</span>
-          <span>${escapeHtml(segment.text)}</span>
-        </button>
+        <div class="segment-item" role="button" tabindex="0" data-start="${segment.start_s}" data-end="${segment.end_s}">
+          <span class="timecode segment-time">${formatSeconds(segment.start_s)} - ${formatSeconds(segment.end_s)}</span>
+          <p class="segment-text">${escapeHtml(segment.text)}</p>
+        </div>
       `).join("");
     }
 
@@ -1127,6 +1843,14 @@
 
       for (const button of segmentButtons) {
         button.addEventListener("click", () => {
+          player.currentTime = Number(button.dataset.start || 0);
+          player.play().catch(() => {});
+        });
+        button.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          event.preventDefault();
           player.currentTime = Number(button.dataset.start || 0);
           player.play().catch(() => {});
         });
@@ -1180,6 +1904,8 @@
         state.selectedDetail = null;
         state.transcript = null;
         state.questions = [];
+        state.questionData = null;
+        state.questionMode = "video";
         state.attemptId = null;
         state.lastResults = null;
         state.userChats = [];
@@ -1449,6 +2175,8 @@
       try {
         const data = await api(`/api/videos/${state.selectedVideoId}/questions${suffix}`);
         state.questions = flattenQuestions(data);
+        state.questionData = data;
+        state.questionMode = "video";
         state.attemptId = null;
         state.lastResults = null;
         renderQuestions(data);
@@ -1462,14 +2190,70 @@
       }
     }
 
+    async function loadCourseQuestions() {
+      const courseId = el.courseQuestionSelect.value;
+      if (!courseId) {
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("count", el.randomQuestionCount.value || "10");
+      if (el.typeFilter.value) {
+        params.set("type", el.typeFilter.value);
+      }
+
+      setBusy(el.loadCourseQuestionsBtn, true, "Loading");
+      try {
+        const data = await api(`/api/courses/${courseId}/questions/random?${params.toString()}`);
+        state.questions = flattenQuestions(data);
+        state.questionData = data;
+        state.questionMode = "course";
+        state.attemptId = null;
+        state.lastResults = null;
+        renderQuestions(data);
+        renderAttempt();
+        renderResults();
+        log("Course random questions loaded", data);
+      } catch (error) {
+        log("Course random question load failed", { error: error.message });
+      } finally {
+        setBusy(el.loadCourseQuestionsBtn, false);
+      }
+    }
+
     function flattenQuestions(data) {
+      if (data.questions) {
+        return data.questions.map((question) => ({
+          ...question,
+          topic: {
+            label: question.topic_label || "Ungrouped",
+            source_video: question.source_video
+          }
+        }));
+      }
       return (data.topics || []).flatMap((topic) =>
         (topic.questions || []).map((question) => ({ ...question, topic }))
       );
     }
 
-    function renderQuestions(data) {
-      if (!state.selectedVideoId) {
+    function groupedQuestions(data) {
+      if (data.questions) {
+        const groups = new Map();
+        for (const question of data.questions || []) {
+          const videoTitle = question.source_video ? question.source_video.title : "Unknown video";
+          const topicLabel = question.topic_label || "Ungrouped";
+          const key = `${question.source_video?.id || "none"}:${topicLabel}`;
+          if (!groups.has(key)) {
+            groups.set(key, { label: `${videoTitle} / ${topicLabel}`, questions: [] });
+          }
+          groups.get(key).questions.push(question);
+        }
+        return Array.from(groups.values());
+      }
+      return data.topics || [];
+    }
+
+    function renderQuestions(data = state.questionData) {
+      if (!state.selectedVideoId && state.questionMode === "video") {
         el.questionList.innerHTML = '<div class="empty">Select a video</div>';
         el.submitBtn.disabled = true;
         return;
@@ -1480,8 +2264,9 @@
         return;
       }
 
+      el.questionSourceLabel.textContent = state.questionMode === "course" ? "Course random bank" : "Video questions";
       el.questionList.innerHTML = "";
-      for (const topic of data.topics || []) {
+      for (const topic of groupedQuestions(data)) {
         const block = document.createElement("section");
         block.className = "topic-block";
         block.innerHTML = `<h3>${escapeHtml(topic.label)}</h3>`;
@@ -1496,6 +2281,7 @@
               <strong>${escapeHtml(question.stem)}</strong>
               <span class="metric">${escapeHtml(question.question_type)}${question.difficulty ? " / " + escapeHtml(question.difficulty) : ""}</span>
             </div>
+            ${question.source_video ? `<div class="subtle">Source video: ${escapeHtml(question.source_video.title)} (${escapeHtml(shortId(question.source_video.id))})</div>` : ""}
             <div class="answer-slot"></div>
           `;
 
@@ -1518,7 +2304,7 @@
 
         el.questionList.appendChild(block);
       }
-      el.submitBtn.disabled = !state.attemptId;
+      el.submitBtn.disabled = !(state.attemptId && state.questionMode === "video");
     }
 
     async function startAttempt() {
@@ -1535,7 +2321,7 @@
         });
         state.attemptId = data.attempt_id;
         renderAttempt();
-        el.submitBtn.disabled = !state.questions.length;
+        el.submitBtn.disabled = !(state.questionMode === "video" && state.questions.length);
         log("Attempt started", data);
       } catch (error) {
         log("Attempt start failed", { error: error.message });
@@ -1585,6 +2371,11 @@
     }
 
     function renderAttempt() {
+      if (state.questionMode === "course") {
+        el.attemptLabel.textContent = "Course bank preview";
+        el.submitBtn.disabled = true;
+        return;
+      }
       el.attemptLabel.textContent = state.attemptId ? shortId(state.attemptId) : "No attempt";
       el.submitBtn.disabled = !(state.attemptId && state.questions.length);
     }
@@ -1638,6 +2429,19 @@
       return id ? `${id.slice(0, 8)}...${id.slice(-4)}` : "";
     }
 
+    function initials(value) {
+      const words = String(value || "Course")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      return words.slice(0, 2).map((word) => word[0].toUpperCase()).join("") || "C";
+    }
+
+    function formatLessonNumber(video) {
+      const index = state.videos.findIndex((entry) => entry.id === video.id);
+      return index >= 0 ? `Lesson ${index + 1}` : "Lesson";
+    }
+
     function cssToken(value) {
       return String(value || "").replace(/[^a-z0-9_-]/gi, "_");
     }
@@ -1666,7 +2470,9 @@
     el.llmBtn.addEventListener("click", checkLlm);
     el.refreshBtn.addEventListener("click", () => refreshVideos());
     el.autoRefresh.addEventListener("change", toggleAutoRefresh);
+    el.courseForm.addEventListener("submit", createCourse);
     el.uploadForm.addEventListener("submit", uploadVideo);
+    el.muxImportForm.addEventListener("submit", importMuxUrl);
     el.deleteVideoBtn.addEventListener("click", deleteSelectedVideo);
     el.chatForm.addEventListener("submit", sendChat);
     el.startChatBtn.addEventListener("click", startChat);
@@ -1677,12 +2483,14 @@
     });
     el.deleteChatBtn.addEventListener("click", deleteSelectedChat);
     el.loadQuestionsBtn.addEventListener("click", loadQuestions);
+    el.loadCourseQuestionsBtn.addEventListener("click", loadCourseQuestions);
     el.startAttemptBtn.addEventListener("click", startAttempt);
     el.submitBtn.addEventListener("click", submitAnswers);
     el.clearLogBtn.addEventListener("click", () => { el.log.textContent = ""; });
 
     checkHealth();
     checkLlm();
+    refreshCourses(true);
     refreshVideos(true);
     renderDetails();
     renderChat();

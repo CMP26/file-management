@@ -4,8 +4,8 @@ use axum::{
     Router,
 };
 use nexalearn_backend::{
-    assessment, chat, config::Config, db, frontend, ingestion, llm, storage, videos, whisper,
-    AppState,
+    assessment, chat, config::Config, courses, db, frontend, ingestion, llm, storage, videos,
+    whisper, AppState,
 };
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -16,6 +16,8 @@ use utoipa_swagger_ui::SwaggerUi;
     paths(
         healthz,
         nexalearn_backend::llm::handler::get_llm_status,
+        nexalearn_backend::courses::list_courses,
+        nexalearn_backend::courses::create_course,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
         nexalearn_backend::videos::delete_video,
@@ -23,7 +25,9 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::videos::get_video_transcript,
         nexalearn_backend::videos::get_video_transcript_vtt,
         nexalearn_backend::ingestion::handler::upload_video,
+        nexalearn_backend::ingestion::handler::import_mux_upload_url,
         nexalearn_backend::assessment::handler::get_video_questions,
+        nexalearn_backend::assessment::handler::get_course_random_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
         nexalearn_backend::assessment::handler::submit_attempt,
         nexalearn_backend::assessment::handler::get_justification,
@@ -36,6 +40,12 @@ use utoipa_swagger_ui::SwaggerUi;
     components(
         schemas(
             nexalearn_backend::models::UploadResponse,
+            nexalearn_backend::models::MuxImportUploadUrlRequest,
+            nexalearn_backend::models::MuxImportUploadUrlResponse,
+            nexalearn_backend::models::CourseResponse,
+            nexalearn_backend::models::CourseListResponse,
+            nexalearn_backend::models::CreateCourseRequest,
+            nexalearn_backend::models::SourceVideoResponse,
             nexalearn_backend::models::VideoOverview,
             nexalearn_backend::models::VideoListResponse,
             nexalearn_backend::models::VideoTopicResponse,
@@ -48,6 +58,8 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::QuestionResponse,
             nexalearn_backend::models::TopicQuestionGroupResponse,
             nexalearn_backend::models::QuestionsByVideoResponse,
+            nexalearn_backend::models::CourseRandomQuestionResponse,
+            nexalearn_backend::models::CourseRandomQuestionsResponse,
             nexalearn_backend::models::StartExamRequest,
             nexalearn_backend::models::StartExamResponse,
             nexalearn_backend::models::SubmitAnswerInput,
@@ -70,8 +82,10 @@ use utoipa_swagger_ui::SwaggerUi;
     tags(
         (name = "Health", description = "Service health check"),
         (name = "LLM", description = "LLM connectivity checks"),
+        (name = "Courses", description = "Course catalog for grouping source videos"),
         (name = "Videos", description = "Video catalog and processing status"),
         (name = "Ingestion", description = "Video upload and processing"),
+        (name = "Mux", description = "Mux URL import integration"),
         (name = "Assessment", description = "Question retrieval, exam flow, grading, and justifications"),
         (name = "Chat", description = "Transcript-grounded chatbot responses")
     )
@@ -100,6 +114,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/llm/status", get(llm::handler::get_llm_status))
+        .route(
+            "/api/courses",
+            get(courses::list_courses).post(courses::create_course),
+        )
         .route("/api/videos", get(videos::list_videos))
         .route(
             "/api/videos/:video_id",
@@ -114,10 +132,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/videos/:video_id/transcript.vtt",
             get(videos::get_video_transcript_vtt),
         )
-        .route(
-            "/api/videos/:video_id/chats",
-            post(chat::start_video_chat),
-        )
+        .route("/api/videos/:video_id/chats", post(chat::start_video_chat))
         .route(
             "/api/chats/:conversation_id/messages",
             post(chat::send_chat_message),
@@ -129,8 +144,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
         .route(
+            "/api/mux/import-upload-url",
+            post(ingestion::handler::import_mux_upload_url),
+        )
+        .route(
             "/api/videos/:video_id/questions",
             get(assessment::handler::get_video_questions),
+        )
+        .route(
+            "/api/courses/:course_id/questions/random",
+            get(assessment::handler::get_course_random_questions),
         )
         .route(
             "/api/videos/:video_id/exams/start",

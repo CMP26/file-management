@@ -7,11 +7,20 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct VideoRecord {
     pub id: Uuid,
+    pub course_id: Uuid,
     pub title: String,
     pub rustfs_key: String,
     pub duration_s: Option<i32>,
     pub status: String,
     pub error_msg: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CourseRecord {
+    pub id: Uuid,
+    pub title: String,
+    pub description: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -104,12 +113,58 @@ pub struct AnswerJustificationRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UploadResponse {
     pub video_id: Uuid,
+    pub course_id: Uuid,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MuxImportUploadUrlRequest {
+    pub title: String,
+    pub course_id: Uuid,
+    pub upload_url: String,
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MuxImportUploadUrlResponse {
+    pub video_id: Uuid,
+    pub course_id: Uuid,
+    pub status: String,
+    pub rustfs_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CourseResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub video_count: i64,
+    pub question_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CourseListResponse {
+    pub courses: Vec<CourseResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateCourseRequest {
+    pub title: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SourceVideoResponse {
+    pub id: Uuid,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VideoOverview {
     pub id: Uuid,
+    pub course_id: Uuid,
+    pub course_title: String,
     pub title: String,
     pub duration_s: Option<i32>,
     pub status: String,
@@ -181,6 +236,7 @@ pub struct QuestionChoiceResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct QuestionResponse {
     pub id: Uuid,
+    pub video_id: Uuid,
     pub stem: String,
     pub question_type: String,
     pub difficulty: Option<String>,
@@ -198,6 +254,25 @@ pub struct TopicQuestionGroupResponse {
 pub struct QuestionsByVideoResponse {
     pub video_id: Uuid,
     pub topics: Vec<TopicQuestionGroupResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CourseRandomQuestionResponse {
+    pub id: Uuid,
+    pub source_video: SourceVideoResponse,
+    pub topic_id: Option<Uuid>,
+    pub topic_label: Option<String>,
+    pub stem: String,
+    pub question_type: String,
+    pub difficulty: Option<String>,
+    pub choices: Vec<QuestionChoiceResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CourseRandomQuestionsResponse {
+    pub course_id: Uuid,
+    pub requested_count: i64,
+    pub questions: Vec<CourseRandomQuestionResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

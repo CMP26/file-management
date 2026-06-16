@@ -61,7 +61,62 @@ Response:
 }
 ```
 
+## Courses
+
+### `GET /api/courses`
+
+Lists courses with video and generated-question counts.
+
+```bash
+curl http://localhost:8080/api/courses
+```
+
+Response:
+
+```json
+{
+  "courses": [
+    {
+      "id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+      "title": "Biology 101",
+      "description": "Introductory biology lectures",
+      "created_at": "2026-06-13T09:30:00Z",
+      "video_count": 3,
+      "question_count": 18
+    }
+  ]
+}
+```
+
+### `POST /api/courses`
+
+Creates a course that videos can be attached to.
+
+```bash
+curl -X POST http://localhost:8080/api/courses \
+  -H "content-type: application/json" \
+  -d '{
+    "title": "Biology 101",
+    "description": "Introductory biology lectures"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "title": "Biology 101",
+  "description": "Introductory biology lectures",
+  "created_at": "2026-06-13T09:30:00Z",
+  "video_count": 0,
+  "question_count": 0
+}
+```
+
 ## Videos
+
+Videos belong to a course through `videos.course_id`. Questions keep their source video through `questions.video_id`, so a course question can always be traced back to the video and transcript used for grading and justification.
 
 ### `GET /api/videos`
 
@@ -78,6 +133,8 @@ Response:
   "videos": [
     {
       "id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+      "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+      "course_title": "Biology 101",
       "title": "Demo lecture",
       "duration_s": 620,
       "status": "ready",
@@ -101,11 +158,13 @@ Request body is `multipart/form-data`.
 
 | Field | Type | Required | Notes |
 |---|---|---:|---|
+| `course_id` | UUID | yes | Course this source video belongs to |
 | `title` | string | yes | Display title for the uploaded media |
 | `file` | file | yes | Video or audio file, up to the backend body limit |
 
 ```bash
-curl -F "title=Demo lecture" \
+curl -F "course_id=7e9ceae3-6ab9-45dc-8f3d-b64df2c103669" \
+  -F "title=Demo lecture" \
   -F "file=@sample.mp4" \
   http://localhost:8080/api/videos/upload
 ```
@@ -115,9 +174,55 @@ Response:
 ```json
 {
   "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
   "status": "pending"
 }
 ```
+
+## Mux Import
+
+### `POST /api/mux/import-upload-url`
+
+Imports a video from a URL provided by your Mux-facing backend, stores it in RustFS, creates a normal `videos` row, and starts the same transcription/question-generation pipeline used by multipart uploads.
+
+This endpoint expects a URL that the backend can `GET` to download the media bytes. It does not create a Mux direct-upload URL for browser uploads.
+
+Request:
+
+```json
+{
+  "title": "Mux uploaded lecture",
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "upload_url": "https://example.com/path/to/video.mp4",
+  "file_name": "lecture.mp4"
+}
+```
+
+`file_name` is optional. When it is omitted, the backend infers the stored file extension from the URL path or `content-type` response header.
+
+```bash
+curl -X POST http://localhost:8080/api/mux/import-upload-url \
+  -H "content-type: application/json" \
+  -d '{
+    "title": "Mux uploaded lecture",
+    "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+    "upload_url": "https://example.com/path/to/video.mp4",
+    "file_name": "lecture.mp4"
+  }'
+```
+
+Response:
+
+```json
+{
+  "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "status": "pending",
+  "rustfs_key": "videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/original.mp4"
+}
+```
+
+The endpoint accepts `http` and `https` URLs and rejects remote media larger than 1 GiB.
 
 ### `GET /api/videos/{video_id}`
 
@@ -133,6 +238,8 @@ Response:
 {
   "video": {
     "id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+    "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+    "course_title": "Biology 101",
     "title": "Demo lecture",
     "duration_s": 620,
     "status": "ready",
@@ -404,6 +511,45 @@ Response:
 
 ## Assessment
 
+### `GET /api/courses/{course_id}/questions/random`
+
+Returns a requested number of random questions generated from videos in one course. Each returned question includes `source_video`, which is the video whose transcript/rubric should be used for grading and justification.
+
+Optional query parameters:
+
+| Name | Type | Notes |
+|---|---|---|
+| `count` | integer | Number of random questions to return. Defaults to `10`; maximum is `100` |
+| `type` | string | Filter by question type, such as `mcq`, `true_false`, or `essay` |
+
+```bash
+curl "http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669/questions/random?count=5&type=essay"
+```
+
+Response:
+
+```json
+{
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "requested_count": 5,
+  "questions": [
+    {
+      "id": "c84ec1f7-a9e8-4018-97d7-a9fef79040b9",
+      "source_video": {
+        "id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+        "title": "Demo lecture"
+      },
+      "topic_id": "c095fe07-f23d-4120-8af2-57f8b319a7ab",
+      "topic_label": "Introduction",
+      "stem": "What is the lecture about?",
+      "question_type": "essay",
+      "difficulty": "medium",
+      "choices": []
+    }
+  ]
+}
+```
+
 ### `GET /api/videos/{video_id}/questions`
 
 Returns generated questions grouped by topic.
@@ -431,6 +577,7 @@ Response:
       "questions": [
         {
           "id": "c84ec1f7-a9e8-4018-97d7-a9fef79040b9",
+          "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
           "stem": "What is the lecture about?",
           "question_type": "mcq",
           "difficulty": "easy",
@@ -465,7 +612,7 @@ Response:
 
 ### `POST /api/exams/{attempt_id}/submit`
 
-Submits answers and grades the attempt. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM.
+Submits answers and grades the attempt. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM. Every submitted question must belong to the attempt video.
 
 ```bash
 curl -X POST http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/submit \

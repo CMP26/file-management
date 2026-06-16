@@ -20,6 +20,8 @@ use uuid::Uuid;
 #[derive(Debug, FromRow)]
 struct VideoOverviewRow {
     id: Uuid,
+    course_id: Uuid,
+    course_title: String,
     title: String,
     duration_s: Option<i32>,
     status: String,
@@ -465,6 +467,8 @@ fn video_overview_sql(filter_video_id: bool) -> &'static str {
             r#"
             SELECT
                 v.id,
+                v.course_id,
+                c.title AS course_title,
                 v.title,
                 v.duration_s,
                 v.status,
@@ -474,16 +478,19 @@ fn video_overview_sql(filter_video_id: bool) -> &'static str {
                 COUNT(DISTINCT q.id)::BIGINT AS question_count,
                 EXISTS(SELECT 1 FROM summaries s WHERE s.video_id = v.id) AS has_summary
             FROM videos v
+            JOIN courses c ON c.id = v.course_id
             LEFT JOIN topics t ON t.video_id = v.id
             LEFT JOIN questions q ON q.video_id = v.id
             WHERE v.id = $1
-            GROUP BY v.id
+            GROUP BY v.id, c.id
             "#
         }
         false => {
             r#"
             SELECT
                 v.id,
+                v.course_id,
+                c.title AS course_title,
                 v.title,
                 v.duration_s,
                 v.status,
@@ -493,9 +500,10 @@ fn video_overview_sql(filter_video_id: bool) -> &'static str {
                 COUNT(DISTINCT q.id)::BIGINT AS question_count,
                 EXISTS(SELECT 1 FROM summaries s WHERE s.video_id = v.id) AS has_summary
             FROM videos v
+            JOIN courses c ON c.id = v.course_id
             LEFT JOIN topics t ON t.video_id = v.id
             LEFT JOIN questions q ON q.video_id = v.id
-            GROUP BY v.id
+            GROUP BY v.id, c.id
             ORDER BY v.created_at DESC
             "#
         }
@@ -506,6 +514,8 @@ impl From<VideoOverviewRow> for VideoOverview {
     fn from(row: VideoOverviewRow) -> Self {
         Self {
             id: row.id,
+            course_id: row.course_id,
+            course_title: row.course_title,
             title: row.title,
             duration_s: row.duration_s,
             status: row.status,

@@ -1,13 +1,19 @@
 use crate::{
     assessment::{grader::grade_answer, justifier::response_for_answer},
     models::{
-        AttemptBreakdownItem, ChoiceRecord, ExamAttemptRecord, JustificationResponse, QuestionChoiceResponse,
-        QuestionRecord, QuestionsByVideoResponse, StartExamRequest, StartExamResponse, SubmitAttemptRequest,
-        SubmitAttemptResponse, TopicQuestionGroupResponse,
+        AttemptBreakdownItem, ChoiceRecord, CourseRandomQuestionResponse,
+        CourseRandomQuestionsResponse, ExamAttemptRecord, JustificationResponse,
+        QuestionChoiceResponse, QuestionRecord, QuestionsByVideoResponse, SourceVideoResponse,
+        StartExamRequest, StartExamResponse, SubmitAttemptRequest, SubmitAttemptResponse,
+        TopicQuestionGroupResponse,
     },
-    AppResult, AppState,
+    AppError, AppResult, AppState,
 };
-use axum::{extract::{Path, Query, State}, Json};
+use axum::{
+    extract::{Path, Query, State},
+    Json,
+};
+use sqlx::FromRow;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -15,6 +21,24 @@ use uuid::Uuid;
 pub struct QuestionFilters {
     pub topic_id: Option<Uuid>,
     pub r#type: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct RandomQuestionFilters {
+    pub count: Option<i64>,
+    pub r#type: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct CourseRandomQuestionRow {
+    id: Uuid,
+    video_id: Uuid,
+    topic_id: Option<Uuid>,
+    stem: String,
+    question_type: String,
+    difficulty: Option<String>,
+    source_video_title: String,
+    topic_label: Option<String>,
 }
 
 #[utoipa::path(
@@ -37,15 +61,21 @@ pub async fn get_video_questions(
     Query(filters): Query<QuestionFilters>,
 ) -> AppResult<Json<QuestionsByVideoResponse>> {
     let topics: Vec<(Uuid, String)> = match filters.topic_id {
-        Some(topic_id) => sqlx::query_as("SELECT id, label FROM topics WHERE video_id = $1 AND id = $2 ORDER BY seq_order")
+        Some(topic_id) => {
+            sqlx::query_as(
+                "SELECT id, label FROM topics WHERE video_id = $1 AND id = $2 ORDER BY seq_order",
+            )
             .bind(video_id)
             .bind(topic_id)
             .fetch_all(&state.pool)
-            .await?,
-        None => sqlx::query_as("SELECT id, label FROM topics WHERE video_id = $1 ORDER BY seq_order")
-            .bind(video_id)
-            .fetch_all(&state.pool)
-            .await?,
+            .await?
+        }
+        None => {
+            sqlx::query_as("SELECT id, label FROM topics WHERE video_id = $1 ORDER BY seq_order")
+                .bind(video_id)
+                .fetch_all(&state.pool)
+                .await?
+        }
     };
 
     let questions: Vec<QuestionRecord> = match &filters.r#type {
@@ -60,24 +90,8 @@ pub async fn get_video_questions(
             .await?,
     };
 
-    let mut question_map: HashMap<Uuid, Vec<QuestionChoiceResponse>> = HashMap::new();
     let question_ids: Vec<Uuid> = questions.iter().map(|question| question.id).collect();
-
-    if !question_ids.is_empty() {
-        let choice_rows: Vec<ChoiceRecord> = sqlx::query_as(
-            "SELECT * FROM choices WHERE question_id = ANY($1) ORDER BY label",
-        )
-        .bind(&question_ids)
-        .fetch_all(&state.pool)
-        .await?;
-
-        for choice in choice_rows {
-            question_map.entry(choice.question_id).or_default().push(QuestionChoiceResponse {
-                label: choice.label,
-                text: choice.text,
-            });
-        }
-    }
+    let question_map = load_choice_map(&state, &question_ids).await?;
 
     let mut grouped_topics = Vec::new();
     for (topic_id, label) in topics {
@@ -86,6 +100,7 @@ pub async fn get_video_questions(
             .filter(|question| question.topic_id == Some(topic_id))
             .map(|question| crate::models::QuestionResponse {
                 id: question.id,
+                video_id: question.video_id,
                 stem: question.stem.clone(),
                 question_type: question.question_type.clone(),
                 difficulty: question.difficulty.clone(),
@@ -100,7 +115,121 @@ pub async fn get_video_questions(
         });
     }
 
-    Ok(Json(QuestionsByVideoResponse { video_id, topics: grouped_topics }))
+    Ok(Json(QuestionsByVideoResponse {
+        video_id,
+        topics: grouped_topics,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/courses/{course_id}/questions/random",
+    tag = "Assessment",
+    params(
+        ("course_id" = Uuid, Path, description = "Course id"),
+        ("count" = Option<i64>, Query, description = "Number of random questions to return, default 10, max 100"),
+        ("type" = Option<String>, Query, description = "Filter by question type")
+    ),
+    responses(
+        (status = 200, description = "Random questions from videos in a course, including source video metadata", body = CourseRandomQuestionsResponse),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Course not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_course_random_questions(
+    State(state): State<AppState>,
+    Path(course_id): Path<Uuid>,
+    Query(filters): Query<RandomQuestionFilters>,
+) -> AppResult<Json<CourseRandomQuestionsResponse>> {
+    ensure_course_exists(&state, course_id).await?;
+
+    let count = filters.count.unwrap_or(10);
+    if !(1..=100).contains(&count) {
+        return Err(AppError::bad_request(
+            "count must be between 1 and 100 random questions",
+        ));
+    }
+
+    let rows: Vec<CourseRandomQuestionRow> = match &filters.r#type {
+        Some(question_type) => {
+            sqlx::query_as(
+                r#"
+            SELECT
+                q.id,
+                q.video_id,
+                q.topic_id,
+                q.stem,
+                q.question_type,
+                q.difficulty,
+                v.title AS source_video_title,
+                t.label AS topic_label
+            FROM questions q
+            JOIN videos v ON v.id = q.video_id
+            LEFT JOIN topics t ON t.id = q.topic_id
+            WHERE v.course_id = $1 AND q.question_type = $2
+            ORDER BY random()
+            LIMIT $3
+            "#,
+            )
+            .bind(course_id)
+            .bind(question_type)
+            .bind(count)
+            .fetch_all(&state.pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                r#"
+            SELECT
+                q.id,
+                q.video_id,
+                q.topic_id,
+                q.stem,
+                q.question_type,
+                q.difficulty,
+                v.title AS source_video_title,
+                t.label AS topic_label
+            FROM questions q
+            JOIN videos v ON v.id = q.video_id
+            LEFT JOIN topics t ON t.id = q.topic_id
+            WHERE v.course_id = $1
+            ORDER BY random()
+            LIMIT $2
+            "#,
+            )
+            .bind(course_id)
+            .bind(count)
+            .fetch_all(&state.pool)
+            .await?
+        }
+    };
+
+    let question_ids: Vec<Uuid> = rows.iter().map(|question| question.id).collect();
+    let choice_map = load_choice_map(&state, &question_ids).await?;
+
+    let questions = rows
+        .into_iter()
+        .map(|row| CourseRandomQuestionResponse {
+            id: row.id,
+            source_video: SourceVideoResponse {
+                id: row.video_id,
+                title: row.source_video_title,
+            },
+            topic_id: row.topic_id,
+            topic_label: row.topic_label,
+            stem: row.stem,
+            question_type: row.question_type,
+            difficulty: row.difficulty,
+            choices: choice_map.get(&row.id).cloned().unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(Json(CourseRandomQuestionsResponse {
+        course_id,
+        requested_count: count,
+        questions,
+    }))
 }
 
 #[utoipa::path(
@@ -142,6 +271,7 @@ pub async fn start_exam_attempt(
     request_body = SubmitAttemptRequest,
     responses(
         (status = 200, description = "Attempt submitted and graded", body = SubmitAttemptResponse),
+        (status = 400, description = "Question does not belong to the attempt video"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -159,7 +289,20 @@ pub async fn submit_attempt(
     let mut breakdown = Vec::new();
 
     for answer_input in payload.answers {
-        let grade = grade_answer(&state, answer_input.question_id, &answer_input.user_answer).await?;
+        let question_video_id: Uuid =
+            sqlx::query_scalar("SELECT video_id FROM questions WHERE id = $1")
+                .bind(answer_input.question_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if question_video_id != attempt.video_id {
+            return Err(AppError::bad_request(format!(
+                "question {} does not belong to video {}",
+                answer_input.question_id, attempt.video_id
+            )));
+        }
+
+        let grade =
+            grade_answer(&state, answer_input.question_id, &answer_input.user_answer).await?;
         let answer_id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO attempt_answers (attempt_id, question_id, user_answer, is_correct, score, graded_at)
@@ -213,5 +356,51 @@ pub async fn get_justification(
     State(state): State<AppState>,
     Path((attempt_id, answer_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<JustificationResponse>> {
-    Ok(Json(response_for_answer(&state, attempt_id, answer_id).await?))
+    Ok(Json(
+        response_for_answer(&state, attempt_id, answer_id).await?,
+    ))
+}
+
+async fn ensure_course_exists(state: &AppState, course_id: Uuid) -> AppResult<()> {
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM courses WHERE id = $1)")
+            .bind(course_id)
+            .fetch_one(&state.pool)
+            .await?;
+
+    if exists {
+        Ok(())
+    } else {
+        Err(AppError::not_found(format!(
+            "course {course_id} was not found"
+        )))
+    }
+}
+
+async fn load_choice_map(
+    state: &AppState,
+    question_ids: &[Uuid],
+) -> AppResult<HashMap<Uuid, Vec<QuestionChoiceResponse>>> {
+    let mut question_map: HashMap<Uuid, Vec<QuestionChoiceResponse>> = HashMap::new();
+    if question_ids.is_empty() {
+        return Ok(question_map);
+    }
+
+    let choice_rows: Vec<ChoiceRecord> =
+        sqlx::query_as("SELECT * FROM choices WHERE question_id = ANY($1) ORDER BY label")
+            .bind(question_ids)
+            .fetch_all(&state.pool)
+            .await?;
+
+    for choice in choice_rows {
+        question_map
+            .entry(choice.question_id)
+            .or_default()
+            .push(QuestionChoiceResponse {
+                label: choice.label,
+                text: choice.text,
+            });
+    }
+
+    Ok(question_map)
 }

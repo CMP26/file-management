@@ -1,6 +1,7 @@
 pub mod assessment;
 pub mod chat;
 pub mod config;
+pub mod courses;
 pub mod db;
 pub mod error;
 pub mod frontend;
