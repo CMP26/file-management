@@ -306,6 +306,9 @@ pub struct AttemptBreakdownItem {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SubmitAttemptResponse {
     pub attempt_id: Uuid,
+    pub status: String,
+    pub is_waiting: bool,
+    pub pending_count: i64,
     pub total_score: i32,
     pub breakdown: Vec<AttemptBreakdownItem>,
 }
@@ -314,6 +317,37 @@ pub struct SubmitAttemptResponse {
 pub struct JustificationResponse {
     pub answer_id: Uuid,
     pub justification: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AttemptAnswerStatusItem {
+    pub answer_id: Uuid,
+    pub question_id: Uuid,
+    pub user_answer: String,
+    pub is_correct: Option<bool>,
+    pub score: Option<i16>,
+    pub graded_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AttemptStatusResponse {
+    pub attempt_id: Uuid,
+    pub user_id: Uuid,
+    pub video_id: Uuid,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub is_waiting: bool,
+    pub total_score: i32,
+    pub pending_count: i64,
+    pub answers: Vec<AttemptAnswerStatusItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct JustificationStatusResponse {
+    pub answer_id: Uuid,
+    pub status: String,
+    pub is_waiting: bool,
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -351,8 +385,8 @@ pub struct TranscriptChatResponse {
     pub name: String,
     pub is_waiting: bool,
     pub user_message_id: Uuid,
-    pub assistant_message_id: Uuid,
-    pub answer: String,
+    pub assistant_message_id: Option<Uuid>,
+    pub answer: Option<String>,
     pub sources: Vec<TranscriptChatSource>,
 }
 

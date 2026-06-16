@@ -202,6 +202,7 @@ async fn enqueue_video(
         }
     });
 
+    let _ = state.video_events.send(video_id);
     Ok((video_id, rustfs_key))
 }
 

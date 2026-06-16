@@ -26,7 +26,7 @@ impl Config {
             rustfs_secret_key: env_or("RUSTFS_SECRET_KEY", "minio12345"),
             gemma_base_url: env_or("GEMMA_BASE_URL", "http://localhost:8100"),
             gemma_model: env_or("GEMMA_MODEL", "ggml-org/gemma-4-E4B-it-GGUF"),
-            gemma_max_concurrent_requests: env_or_usize("GEMMA_MAX_CONCURRENT_REQUESTS", 1)?,
+            gemma_max_concurrent_requests: env_or_usize("GEMMA_MAX_CONCURRENT_REQUESTS", 2)?,
             gemma_request_timeout_seconds: env_or_u64("GEMMA_REQUEST_TIMEOUT_SECONDS", 300)?,
             whisper_url: env_or("WHISPER_URL", "http://localhost:8000"),
             tmp_dir: env_or("TMP_DIR", "/tmp/nexalearn"),

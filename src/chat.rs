@@ -9,11 +9,14 @@ use crate::{
 };
 use axum::{
     extract::{Path, Query, State},
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::{collections::HashSet, convert::Infallible};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -33,7 +36,7 @@ struct ChatMessageRow {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ConversationContext {
     user_id: Uuid,
     video_id: Uuid,
@@ -153,35 +156,74 @@ pub async fn send_chat_message(
         insert_chat_message(&state, conversation_id, "user", message, &[]).await?;
     set_conversation_waiting(&state, conversation_id, true).await?;
 
-    let (answer, sources) =
-        match generate_chat_answer(&state, &conversation, message, &prompt_history).await {
-            Ok(result) => result,
-            Err(error) => {
-                set_conversation_waiting(&state, conversation_id, false).await?;
-                return Err(error);
-            }
-        };
-
-    let assistant_message_id =
-        match insert_chat_message(&state, conversation_id, "assistant", &answer, &sources).await {
-            Ok(message_id) => message_id,
-            Err(error) => {
-                set_conversation_waiting(&state, conversation_id, false).await?;
-                return Err(error);
-            }
-        };
-    set_conversation_waiting(&state, conversation_id, false).await?;
+    let worker_state = state.clone();
+    let worker_conversation = conversation.clone();
+    let worker_message = message.to_string();
+    let worker_history = prompt_history.clone();
+    tokio::spawn(async move {
+        if let Err(error) = complete_chat_message(
+            worker_state,
+            conversation_id,
+            worker_conversation,
+            worker_message,
+            worker_history,
+        )
+        .await
+        {
+            tracing::error!(conversation_id = %conversation_id, error = %error, "chat llm worker failed");
+        }
+    });
 
     Ok(Json(TranscriptChatResponse {
         conversation_id,
         video_id: conversation.video_id,
         name: conversation.name,
-        is_waiting: false,
+        is_waiting: true,
         user_message_id,
-        assistant_message_id,
-        answer,
-        sources,
+        assistant_message_id: None,
+        answer: None,
+        sources: Vec::new(),
     }))
+}
+
+async fn complete_chat_message(
+    state: AppState,
+    conversation_id: Uuid,
+    conversation: ConversationContext,
+    message: String,
+    prompt_history: Vec<TranscriptChatMessage>,
+) -> AppResult<()> {
+    tracing::info!(conversation_id = %conversation_id, "chat llm worker started");
+
+    let result = generate_chat_answer(&state, &conversation, &message, &prompt_history).await;
+    match result {
+        Ok((answer, sources)) => {
+            match insert_chat_message(&state, conversation_id, "assistant", &answer, &sources).await
+            {
+                Ok(_) => {
+                    tracing::info!(conversation_id = %conversation_id, "chat llm worker saved assistant response");
+                }
+                Err(error) => {
+                    tracing::error!(conversation_id = %conversation_id, error = %error, "chat llm worker failed to save assistant response");
+                }
+            }
+        }
+        Err(error) => {
+            let fallback = format!(
+                "I could not get a response from the LLM for this message. Please try again. Error: {error}"
+            );
+            if let Err(insert_error) =
+                insert_chat_message(&state, conversation_id, "assistant", &fallback, &[]).await
+            {
+                tracing::error!(conversation_id = %conversation_id, error = %insert_error, "chat llm worker failed to save fallback response");
+            }
+            tracing::warn!(conversation_id = %conversation_id, error = %error, "chat llm worker saved fallback response");
+        }
+    }
+
+    set_conversation_waiting(&state, conversation_id, false).await?;
+    tracing::info!(conversation_id = %conversation_id, "chat llm worker completed");
+    Ok(())
 }
 
 async fn generate_chat_answer(
@@ -285,22 +327,73 @@ pub async fn get_user_chat(
 ) -> AppResult<Json<TranscriptChatHistoryResponse>> {
     clear_stale_waiting_chats(&state).await?;
 
-    let conversation = conversation_context(&state, user_id, conversation_id).await?;
-    let messages = load_chat_messages(&state, conversation_id)
-        .await?
-        .into_iter()
-        .map(message_response_from_row)
-        .collect();
+    Ok(Json(
+        chat_history_response(&state, user_id, conversation_id).await?,
+    ))
+}
 
-    Ok(Json(TranscriptChatHistoryResponse {
-        user_id: conversation.user_id,
-        video_id: conversation.video_id,
-        video_title: conversation.video_title,
-        conversation_id,
-        name: conversation.name,
-        is_waiting: conversation.is_waiting,
-        messages,
-    }))
+#[utoipa::path(
+    get,
+    path = "/api/users/{user_id}/chats/{conversation_id}/events",
+    tag = "Chat",
+    params(
+        ("user_id" = Uuid, Path, description = "User id"),
+        ("conversation_id" = Uuid, Path, description = "Chat conversation id")
+    ),
+    responses(
+        (status = 200, description = "Server-sent chat updates while an assistant response is pending"),
+        (status = 404, description = "Chat not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn stream_user_chat_events(
+    State(state): State<AppState>,
+    Path((user_id, conversation_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Sse<ReceiverStream<Result<Event, Infallible>>>> {
+    clear_stale_waiting_chats(&state).await?;
+    let mut chat_events = state.chat_events.subscribe();
+    let initial = chat_history_response(&state, user_id, conversation_id).await?;
+
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(16);
+    let worker_state = state.clone();
+
+    tokio::spawn(async move {
+        let _ = send_chat_event(&tx, &initial).await;
+        if !initial.is_waiting {
+            return;
+        }
+
+        loop {
+            match chat_events.recv().await {
+                Ok(changed_conversation_id) if changed_conversation_id == conversation_id => {
+                    match chat_history_response(&worker_state, user_id, conversation_id).await {
+                        Ok(snapshot) => {
+                            let is_waiting = snapshot.is_waiting;
+                            if send_chat_event(&tx, &snapshot).await.is_err() {
+                                return;
+                            }
+                            if !is_waiting {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            let event = Event::default().event("error").data(error.to_string());
+                            let _ = tx.send(Ok(event)).await;
+                            return;
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let event = Event::default().event("error").data(error.to_string());
+                    let _ = tx.send(Ok(event)).await;
+                    return;
+                }
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
 }
 
 #[utoipa::path(
@@ -337,6 +430,42 @@ pub async fn delete_user_chat(
         conversation_id,
         deleted: true,
     }))
+}
+
+async fn chat_history_response(
+    state: &AppState,
+    user_id: Uuid,
+    conversation_id: Uuid,
+) -> AppResult<TranscriptChatHistoryResponse> {
+    let conversation = conversation_context(state, user_id, conversation_id).await?;
+    let messages = load_chat_messages(state, conversation_id)
+        .await?
+        .into_iter()
+        .map(message_response_from_row)
+        .collect();
+
+    Ok(TranscriptChatHistoryResponse {
+        user_id: conversation.user_id,
+        video_id: conversation.video_id,
+        video_title: conversation.video_title,
+        conversation_id,
+        name: conversation.name,
+        is_waiting: conversation.is_waiting,
+        messages,
+    })
+}
+
+async fn send_chat_event(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    snapshot: &TranscriptChatHistoryResponse,
+) -> Result<(), mpsc::error::SendError<Result<Event, Infallible>>> {
+    let data = serde_json::to_string(snapshot).unwrap_or_else(|error| {
+        format!(
+            "{{\"error\":\"failed to serialize chat snapshot\",\"message\":\"{}\"}}",
+            error
+        )
+    });
+    tx.send(Ok(Event::default().event("chat").data(data))).await
 }
 
 async fn video_title(state: &AppState, video_id: Uuid) -> AppResult<String> {
@@ -479,22 +608,29 @@ async fn set_conversation_waiting(
         .bind(conversation_id)
         .execute(&state.pool)
         .await?;
+    let _ = state.chat_events.send(conversation_id);
+    tracing::info!(conversation_id = %conversation_id, is_waiting, "chat waiting state updated");
     Ok(())
 }
 
 async fn clear_stale_waiting_chats(state: &AppState) -> AppResult<()> {
-    let stale_after_seconds = (state.config.gemma_request_timeout_seconds * 3).max(900) as f64;
-    sqlx::query(
+    let stale_after_seconds = (state.config.gemma_request_timeout_seconds + 30).max(90) as f64;
+    let stale_conversation_ids: Vec<Uuid> = sqlx::query_scalar(
         r#"
         UPDATE chat_conversations
         SET is_waiting = false, updated_at = now()
         WHERE is_waiting = true
           AND updated_at < now() - ($1 * interval '1 second')
+        RETURNING id
         "#,
     )
     .bind(stale_after_seconds)
-    .execute(&state.pool)
+    .fetch_all(&state.pool)
     .await?;
+    for conversation_id in stale_conversation_ids {
+        let _ = state.chat_events.send(conversation_id);
+        tracing::info!(conversation_id = %conversation_id, "stale chat waiting state cleared");
+    }
     Ok(())
 }
 

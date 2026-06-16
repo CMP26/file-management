@@ -194,12 +194,14 @@ async fn update_status(
     status: &str,
     error_msg: Option<&str>,
 ) -> AppResult<()> {
+    tracing::info!(video_id = %video_id, status = %status, error_msg = error_msg, "video processing status updated");
     sqlx::query("UPDATE videos SET status = $1, error_msg = $2 WHERE id = $3")
         .bind(status)
         .bind(error_msg)
         .bind(video_id)
         .execute(&state.pool)
         .await?;
+    let _ = state.video_events.send(video_id);
     Ok(())
 }
 

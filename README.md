@@ -87,12 +87,12 @@ RUSTFS_ENDPOINT=http://localhost:9000
 WHISPER_URL=http://localhost:8000
 GEMMA_BASE_URL=http://localhost:8100
 GEMMA_MODEL=ggml-org/gemma-4-E4B-it-GGUF
-GEMMA_MAX_CONCURRENT_REQUESTS=1
+GEMMA_MAX_CONCURRENT_REQUESTS=2
 GEMMA_REQUEST_TIMEOUT_SECONDS=300
 BIND_ADDR=127.0.0.1:8080
 ```
 
-`GEMMA_MAX_CONCURRENT_REQUESTS` defaults to `1` so chats, grading, summaries, and question generation wait in the backend instead of overwhelming a local llama.cpp/Gemma server with parallel generations. Increase it only if your LLM server can reliably handle concurrent requests.
+`GEMMA_MAX_CONCURRENT_REQUESTS` defaults to `2` so Gemma can keep one request active while another queued generation is allowed through. Failed or overloaded generations are retried automatically; adjust this value only if your LLM server needs stricter or looser concurrency.
 
 The backend runs migrations automatically on startup.
 
@@ -104,7 +104,7 @@ Open:
 http://localhost:8080/
 ```
 
-Use the console to upload media, refresh videos, inspect processing status, load questions, start an attempt, submit answers, and request justifications.
+Use the console to upload media, refresh videos, inspect processing status, load questions, start an attempt, submit answers, and request justifications. Long-running operations expose source-of-truth `GET` endpoints plus optional SSE streams, and the frontend subscribes to those streams for upload processing, chat, grading, and justifications.
 
 The selected-video panel also includes:
 
@@ -155,7 +155,7 @@ Swagger UI:
 http://localhost:8080/swagger-ui
 ```
 
-For the full backend endpoint reference, request/response examples, and transcript chat API, see `BACKEND_API.md`.
+For the full backend endpoint reference, request/response examples, async operation contract, SSE streams, and transcript chat API, see `BACKEND_API.md`.
 
 ### 6. Stop everything
 

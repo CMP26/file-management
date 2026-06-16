@@ -1,8 +1,18 @@
 use crate::{AppError, AppResult};
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{sync::Semaphore, time::sleep};
+use tracing::info;
+
+const GENERATE_ATTEMPTS: usize = 3;
+static GEMMA_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct GemmaClient {
@@ -83,6 +93,10 @@ impl GemmaClient {
     }
 
     pub async fn list_model_ids(&self) -> AppResult<Vec<String>> {
+        info!(
+            base_url = %self.base_url,
+            "gemma models request started"
+        );
         let response = self
             .client
             .get(format!("{}/v1/models", self.base_url))
@@ -91,16 +105,29 @@ impl GemmaClient {
             .error_for_status()?;
 
         let parsed: ModelsResponse = response.json().await?;
-        Ok(parsed.data.into_iter().map(|model| model.id).collect())
+        let model_ids = parsed
+            .data
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        info!(
+            model_count = model_ids.len(),
+            "gemma models request completed"
+        );
+        Ok(model_ids)
     }
 
     pub async fn generate(&self, prompt: &str) -> AppResult<String> {
-        let _permit = self
-            .request_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| AppError::external("gemma request queue was closed"))?;
+        let request_id = GEMMA_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let prompt_chars = prompt.chars().count();
+        info!(
+            request_id,
+            model = %self.model,
+            prompt_chars,
+            max_attempts = GENERATE_ATTEMPTS,
+            available_permits = self.request_limiter.available_permits(),
+            "gemma generation queued"
+        );
 
         let payload = ChatCompletionRequest {
             model: &self.model,
@@ -113,15 +140,85 @@ impl GemmaClient {
             stream: false,
         };
 
+        let mut last_error = None;
+        for attempt in 1..=GENERATE_ATTEMPTS {
+            match self.generate_once(request_id, attempt, &payload).await {
+                Ok(content) => {
+                    info!(
+                        request_id,
+                        attempt,
+                        response_chars = content.chars().count(),
+                        "gemma generation completed"
+                    );
+                    return Ok(content);
+                }
+                Err(error) => {
+                    info!(
+                        request_id,
+                        attempt,
+                        error = %error,
+                        will_retry = attempt < GENERATE_ATTEMPTS,
+                        "gemma generation attempt failed"
+                    );
+                    last_error = Some(error);
+                    if attempt < GENERATE_ATTEMPTS {
+                        sleep(Duration::from_millis(400 * attempt as u64)).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| AppError::external("gemma generation failed")))
+    }
+
+    async fn generate_once(
+        &self,
+        request_id: u64,
+        attempt: usize,
+        payload: &ChatCompletionRequest<'_>,
+    ) -> AppResult<String> {
+        info!(
+            request_id,
+            attempt,
+            available_permits = self.request_limiter.available_permits(),
+            "gemma waiting for request permit"
+        );
+        let _permit = self
+            .request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::external("gemma request queue was closed"))?;
+
+        info!(request_id, attempt, "gemma request permit acquired");
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .json(&payload)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+
+        let status = response.status();
+        info!(
+            request_id,
+            attempt,
+            status = %status,
+            "gemma http response received"
+        );
+        if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return Err(AppError::external(format!(
+                "gemma returned retryable status {status}"
+            )));
+        }
+        let response = response.error_for_status()?;
 
         let parsed: ChatCompletionResponse = response.json().await?;
+        info!(
+            request_id,
+            attempt,
+            choice_count = parsed.choices.len(),
+            "gemma response parsed"
+        );
         let content = parsed
             .choices
             .into_iter()
@@ -139,11 +236,26 @@ impl GemmaClient {
     {
         let mut last_error = None;
 
-        for _attempt in 0..3 {
+        for attempt in 1..=3 {
+            info!(
+                attempt,
+                max_attempts = 3,
+                "gemma json generation attempt started"
+            );
             let output = self.generate(prompt).await?;
             match parse_json_output::<T>(&output) {
-                Ok(value) => return Ok(value),
-                Err(error) => last_error = Some(error),
+                Ok(value) => {
+                    info!(attempt, "gemma json generation parsed successfully");
+                    return Ok(value);
+                }
+                Err(error) => {
+                    info!(
+                        attempt,
+                        error = %error,
+                        "gemma json generation parse failed"
+                    );
+                    last_error = Some(error);
+                }
             }
         }
 

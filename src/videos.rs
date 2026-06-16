@@ -9,12 +9,17 @@ use crate::{
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
-use std::path::PathBuf;
+use std::{convert::Infallible, path::PathBuf};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 #[derive(Debug, FromRow)]
@@ -68,6 +73,73 @@ pub async fn get_video(
     State(state): State<AppState>,
     Path(video_id): Path<Uuid>,
 ) -> AppResult<Json<VideoDetailResponse>> {
+    Ok(Json(video_detail_response(&state, video_id).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/videos/{video_id}/events",
+    tag = "Videos",
+    params(
+        ("video_id" = Uuid, Path, description = "Video id")
+    ),
+    responses(
+        (status = 200, description = "Server-sent video processing updates"),
+        (status = 404, description = "Video not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn stream_video_events(
+    State(state): State<AppState>,
+    Path(video_id): Path<Uuid>,
+) -> AppResult<Sse<ReceiverStream<Result<Event, Infallible>>>> {
+    let mut video_events = state.video_events.subscribe();
+    let initial = video_detail_response(&state, video_id).await?;
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(16);
+    let worker_state = state.clone();
+
+    tokio::spawn(async move {
+        let _ = send_video_event(&tx, &initial).await;
+        if is_terminal_video_status(&initial.video.status) {
+            return;
+        }
+
+        loop {
+            match video_events.recv().await {
+                Ok(changed_video_id) if changed_video_id == video_id => {
+                    match video_detail_response(&worker_state, video_id).await {
+                        Ok(snapshot) => {
+                            let terminal = is_terminal_video_status(&snapshot.video.status);
+                            if send_video_event(&tx, &snapshot).await.is_err() {
+                                return;
+                            }
+                            if terminal {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx
+                                .send(Ok(Event::default().event("error").data(error.to_string())))
+                                .await;
+                            return;
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tx
+                        .send(Ok(Event::default().event("error").data(error.to_string())))
+                        .await;
+                    return;
+                }
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
+}
+
+async fn video_detail_response(state: &AppState, video_id: Uuid) -> AppResult<VideoDetailResponse> {
     let row: VideoOverviewRow = sqlx::query_as(video_overview_sql(true))
         .bind(video_id)
         .fetch_optional(&state.pool)
@@ -104,12 +176,30 @@ pub async fn get_video(
     })
     .collect();
 
-    Ok(Json(VideoDetailResponse {
+    Ok(VideoDetailResponse {
         video: row.into(),
         topics,
         summary,
         transcript_preview,
-    }))
+    })
+}
+
+async fn send_video_event(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    snapshot: &VideoDetailResponse,
+) -> Result<(), mpsc::error::SendError<Result<Event, Infallible>>> {
+    let data = serde_json::to_string(snapshot).unwrap_or_else(|error| {
+        format!(
+            "{{\"error\":\"failed to serialize video snapshot\",\"message\":\"{}\"}}",
+            error
+        )
+    });
+    tx.send(Ok(Event::default().event("video").data(data)))
+        .await
+}
+
+fn is_terminal_video_status(status: &str) -> bool {
+    matches!(status, "ready" | "failed")
 }
 
 #[utoipa::path(

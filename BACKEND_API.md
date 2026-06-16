@@ -23,6 +23,58 @@ Errors are returned as JSON:
 
 Common error codes are `bad_request`, `not_found`, `conflict`, `external_service_error`, `database_error`, `io_error`, `http_error`, `json_error`, and `internal_error`.
 
+## Async Operations
+
+Long-running work follows the same contract everywhere:
+
+- A `POST` starts or queues the work and returns immediately.
+- A `GET` endpoint is the source of truth for the current state.
+- An optional `GET .../events` endpoint streams server-sent events for clients that want push updates instead of polling.
+
+SSE responses use `text/event-stream`. Each stream sends an initial snapshot, then later snapshots when the underlying state changes. Clients should still treat the matching `GET` endpoint as authoritative, because SSE is a notification channel and may disconnect.
+
+### Payload Contract
+
+The SSE event `data` is the same JSON shape returned by the matching source-of-truth `GET` endpoint. It is not necessarily the same shape returned by the `POST` endpoint that started the operation.
+
+For client implementations, deserialize SSE events as the matching `GET` response type:
+
+| Operation | Starter response | Source-of-truth / SSE response |
+|---|---|---|
+| Video upload/import processing | `UploadResponse` or `MuxImportUploadUrlResponse` | `VideoDetailResponse` |
+| Transcript chat response generation | `TranscriptChatResponse` | `TranscriptChatHistoryResponse` |
+| Exam answer grading | `SubmitAttemptResponse` | `AttemptStatusResponse` |
+| Answer justification generation | `JustificationStatusResponse` from `/justification/start` | `JustificationStatusResponse` |
+
+So the normal integration pattern is:
+
+1. Call the `POST` endpoint and keep the returned id.
+2. Read the source-of-truth `GET` endpoint when you need a definitive snapshot.
+3. Optionally open the SSE endpoint and parse each named event as the same response type returned by that `GET`.
+
+Current async streams:
+
+| Operation | Source-of-truth GET | Optional SSE | SSE event name | `data` JSON type | Stream closes when |
+|---|---|---|---|---|---|
+| Video upload/import processing | `GET /api/videos/{video_id}` | `GET /api/videos/{video_id}/events` | `video` | `VideoDetailResponse` | `video.status` is `ready` or `failed` |
+| Transcript chat response generation | `GET /api/users/{user_id}/chats/{conversation_id}` | `GET /api/users/{user_id}/chats/{conversation_id}/events` | `chat` | `TranscriptChatHistoryResponse` | `is_waiting` is `false` |
+| Exam answer grading | `GET /api/exams/{attempt_id}` | `GET /api/exams/{attempt_id}/events` | `exam` | `AttemptStatusResponse` | `is_waiting` is `false` |
+| Answer justification generation | `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/status` | `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/events` | `justification` | `JustificationStatusResponse` | `is_waiting` is `false` |
+
+All streams can also emit `event: error` before closing if the server cannot build the next snapshot. The `data` for an `error` event is a plain string error message. HTTP-level failures still use the normal JSON error response before a stream is established.
+
+Example client wiring:
+
+```js
+const source = new EventSource("/api/videos/<video-id>/events");
+source.addEventListener("video", (event) => {
+  const snapshot = JSON.parse(event.data);
+});
+source.addEventListener("error", () => {
+  source.close();
+});
+```
+
 ## Health
 
 ### `GET /healthz`
@@ -41,7 +93,7 @@ ok
 
 ## LLM
 
-The backend serializes Gemma generation requests by default to protect local llama.cpp/Gemma servers from dropped concurrent requests. Tune this with `GEMMA_MAX_CONCURRENT_REQUESTS` (default `1`) and `GEMMA_REQUEST_TIMEOUT_SECONDS` (default `300`).
+The backend sends up to two Gemma generation requests at a time by default and retries dropped/overloaded requests. Tune this with `GEMMA_MAX_CONCURRENT_REQUESTS` (default `2`) and `GEMMA_REQUEST_TIMEOUT_SECONDS` (default `300`).
 
 ### `GET /api/llm/status`
 
@@ -264,6 +316,39 @@ Response:
 }
 ```
 
+### `GET /api/videos/{video_id}/events`
+
+Streams video processing updates after multipart upload or Mux import. The stream sends `event: video` with the same JSON shape as `GET /api/videos/{video_id}`. It closes after the video reaches `ready` or `failed`.
+
+SSE event: `video`; `data`: `VideoDetailResponse`.
+
+```bash
+curl -N http://localhost:8080/api/videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/events
+```
+
+Example event data:
+
+```json
+{
+  "video": {
+    "id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+    "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+    "course_title": "Biology 101",
+    "title": "Demo lecture",
+    "duration_s": 620,
+    "status": "transcribing",
+    "error_msg": null,
+    "created_at": "2026-06-13T10:00:00Z",
+    "topic_count": 0,
+    "question_count": 0,
+    "has_summary": false
+  },
+  "topics": [],
+  "summary": null,
+  "transcript_preview": null
+}
+```
+
 ### `DELETE /api/videos/{video_id}`
 
 Deletes the video row, generated database records, and stored objects.
@@ -370,11 +455,11 @@ Response:
 
 ### `POST /api/chats/{conversation_id}/messages`
 
-Saves the user's message immediately, marks the chat as waiting for the LLM response, waits for a slot in the backend's LLM queue, asks the local Gemma model, then saves the assistant response and clears the waiting state. If the same chat is already waiting, the endpoint returns `409 Conflict` instead of starting a competing LLM request.
+Saves the user's message immediately, marks the chat as waiting for the LLM response, queues the LLM work in the background, and returns immediately. A background worker asks the local Gemma model, saves the assistant response, and clears the waiting state. If the same chat is already waiting, the endpoint returns `409 Conflict` instead of starting a competing LLM request.
 
-When transcript segments are available, the backend selects relevant transcript context and returns those source segments. If the transcript is missing or the question is outside the video, the model can still answer using broader knowledge and should label that as outside-video context. The chat's stored messages are used as that chat's history/context.
+When transcript segments are available, the backend selects relevant transcript context for the background LLM call. If the transcript is missing or the question is outside the video, the model can still answer using broader knowledge and should label that as outside-video context. The chat's stored messages are used as that chat's history/context.
 
-While the model is still generating, `GET /api/users/{user_id}/chats` and `GET /api/users/{user_id}/chats/{conversation_id}` can show `is_waiting: true`; the submitted user message is already saved at that point. Stale waiting states older than the configured LLM timeout window are cleared when chats are read or a new message is submitted.
+While the model is still generating, `GET /api/users/{user_id}/chats` and `GET /api/users/{user_id}/chats/{conversation_id}` can show `is_waiting: true`; the submitted user message is already saved at that point. Stale waiting states older than the configured LLM timeout window are cleared when chats are read or a new message is submitted. Use `GET /api/users/{user_id}/chats/{conversation_id}` as the source of truth, or subscribe to `GET /api/users/{user_id}/chats/{conversation_id}/events` for optional push updates.
 
 Request:
 
@@ -405,18 +490,11 @@ Response:
   "conversation_id": "97fa16f9-d84a-47ef-a752-8a5563c144cf",
   "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
   "name": "Exam prep questions",
-  "is_waiting": false,
+  "is_waiting": true,
   "user_message_id": "35e192cf-b493-4b82-b3a2-b5a8dd5060dd",
-  "assistant_message_id": "c460d657-3ac1-4ba1-a384-b3d818afac59",
-  "answer": "The introduction frames the lecture around...",
-  "sources": [
-    {
-      "seq_index": 0,
-      "start_s": 0.0,
-      "end_s": 4.2,
-      "text": "Welcome to the lecture."
-    }
-  ]
+  "assistant_message_id": null,
+  "answer": null,
+  "sources": []
 }
 ```
 
@@ -488,6 +566,38 @@ Response:
         }
       ],
       "created_at": "2026-06-13T10:17:03Z"
+    }
+  ]
+}
+```
+
+### `GET /api/users/{user_id}/chats/{conversation_id}/events`
+
+Streams chat updates while an assistant response is pending. The stream sends `event: chat` with the same JSON shape as `GET /api/users/{user_id}/chats/{conversation_id}`. It sends an initial snapshot and closes after `is_waiting` becomes `false`.
+
+SSE event: `chat`; `data`: `TranscriptChatHistoryResponse`.
+
+```bash
+curl -N http://localhost:8080/api/users/11111111-1111-4111-8111-111111111111/chats/97fa16f9-d84a-47ef-a752-8a5563c144cf/events
+```
+
+Example event data:
+
+```json
+{
+  "user_id": "11111111-1111-4111-8111-111111111111",
+  "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "video_title": "Demo lecture",
+  "conversation_id": "97fa16f9-d84a-47ef-a752-8a5563c144cf",
+  "name": "Exam prep questions",
+  "is_waiting": true,
+  "messages": [
+    {
+      "id": "35e192cf-b493-4b82-b3a2-b5a8dd5060dd",
+      "role": "user",
+      "content": "What should I remember from the introduction?",
+      "sources": [],
+      "created_at": "2026-06-13T10:17:00Z"
     }
   ]
 }
@@ -613,7 +723,7 @@ Response:
 
 ### `POST /api/exams/{attempt_id}/submit`
 
-Submits answers and grades the attempt. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM. Every submitted question must belong to the attempt video.
+Submits answers, stores them immediately, and queues grading in the background. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM. Every submitted question must belong to the attempt video.
 
 ```bash
 curl -X POST http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/submit \
@@ -633,21 +743,62 @@ Response:
 ```json
 {
   "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
-  "total_score": 1,
-  "breakdown": [
+  "status": "grading",
+  "is_waiting": true,
+  "pending_count": 1,
+  "total_score": 0,
+  "breakdown": []
+}
+```
+
+Use `GET /api/exams/{attempt_id}` as the source of truth for grading state and final scores.
+
+### `GET /api/exams/{attempt_id}`
+
+Returns the current grading state for an exam attempt. `status` is `started`, `grading`, or `graded`.
+
+```bash
+curl http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2
+```
+
+Response:
+
+```json
+{
+  "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
+  "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+  "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "submitted_at": "2026-06-13T10:30:00Z",
+  "status": "grading",
+  "is_waiting": true,
+  "total_score": 0,
+  "pending_count": 1,
+  "answers": [
     {
       "answer_id": "25cb9158-f0d7-47e8-93bb-6817540a16dc",
       "question_id": "c84ec1f7-a9e8-4018-97d7-a9fef79040b9",
-      "is_correct": true,
-      "score": 1
+      "user_answer": "A",
+      "is_correct": null,
+      "score": null,
+      "graded_at": null
     }
   ]
 }
 ```
 
+### `GET /api/exams/{attempt_id}/events`
+
+Streams grading updates for an exam attempt. The stream sends `event: exam` with the same JSON shape as `GET /api/exams/{attempt_id}`. It sends an initial snapshot and closes when `is_waiting` becomes `false`.
+
+SSE event: `exam`; `data`: `AttemptStatusResponse`.
+
+```bash
+curl -N http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/events
+```
+
 ### `GET /api/exams/{attempt_id}/answers/{answer_id}/justification`
 
-Returns or creates an LLM-generated justification for a graded answer.
+Returns or creates an LLM-generated justification for a graded answer synchronously. For API clients that do not want to hold a request open while the LLM works, use the async start/status/events endpoints below.
 
 ```bash
 curl http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/answers/25cb9158-f0d7-47e8-93bb-6817540a16dc/justification
@@ -660,3 +811,52 @@ Response:
   "answer_id": "25cb9158-f0d7-47e8-93bb-6817540a16dc",
   "justification": "The selected answer matches the transcript because..."
 }
+```
+
+### `POST /api/exams/{attempt_id}/answers/{answer_id}/justification/start`
+
+Queues justification generation and returns immediately. If a justification already exists, it is returned in the response and `is_waiting` is `false`.
+
+```bash
+curl -X POST http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/answers/25cb9158-f0d7-47e8-93bb-6817540a16dc/justification/start
+```
+
+Response:
+
+```json
+{
+  "answer_id": "25cb9158-f0d7-47e8-93bb-6817540a16dc",
+  "status": "generating",
+  "is_waiting": true,
+  "justification": null
+}
+```
+
+### `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/status`
+
+Returns the current justification state. `status` is `generating` or `ready`.
+
+```bash
+curl http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/answers/25cb9158-f0d7-47e8-93bb-6817540a16dc/justification/status
+```
+
+Response:
+
+```json
+{
+  "answer_id": "25cb9158-f0d7-47e8-93bb-6817540a16dc",
+  "status": "ready",
+  "is_waiting": false,
+  "justification": "The selected answer matches the transcript because..."
+}
+```
+
+### `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/events`
+
+Streams justification updates. The stream sends `event: justification` with the same JSON shape as `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/status`. It sends an initial snapshot and closes when `is_waiting` becomes `false`.
+
+SSE event: `justification`; `data`: `JustificationStatusResponse`.
+
+```bash
+curl -N http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/answers/25cb9158-f0d7-47e8-93bb-6817540a16dc/justification/events
+```

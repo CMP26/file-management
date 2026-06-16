@@ -20,6 +20,7 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::courses::create_course,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
+        nexalearn_backend::videos::stream_video_events,
         nexalearn_backend::videos::delete_video,
         nexalearn_backend::videos::get_video_media,
         nexalearn_backend::videos::get_video_transcript,
@@ -29,12 +30,18 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::get_course_random_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
+        nexalearn_backend::assessment::handler::get_attempt_status,
+        nexalearn_backend::assessment::handler::stream_attempt_events,
         nexalearn_backend::assessment::handler::submit_attempt,
         nexalearn_backend::assessment::handler::get_justification,
+        nexalearn_backend::assessment::handler::start_justification,
+        nexalearn_backend::assessment::handler::get_justification_status,
+        nexalearn_backend::assessment::handler::stream_justification_events,
         nexalearn_backend::chat::start_video_chat,
         nexalearn_backend::chat::send_chat_message,
         nexalearn_backend::chat::list_user_chats,
         nexalearn_backend::chat::get_user_chat,
+        nexalearn_backend::chat::stream_user_chat_events,
         nexalearn_backend::chat::delete_user_chat
     ),
     components(
@@ -66,6 +73,9 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::SubmitAttemptRequest,
             nexalearn_backend::models::AttemptBreakdownItem,
             nexalearn_backend::models::SubmitAttemptResponse,
+            nexalearn_backend::models::AttemptAnswerStatusItem,
+            nexalearn_backend::models::AttemptStatusResponse,
+            nexalearn_backend::models::JustificationStatusResponse,
             nexalearn_backend::models::JustificationResponse,
             nexalearn_backend::models::TranscriptChatMessage,
             nexalearn_backend::models::StartTranscriptChatRequest,
@@ -128,6 +138,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/videos/:video_id",
             get(videos::get_video).delete(videos::delete_video),
         )
+        .route(
+            "/api/videos/:video_id/events",
+            get(videos::stream_video_events),
+        )
         .route("/api/videos/:video_id/media", get(videos::get_video_media))
         .route(
             "/api/videos/:video_id/transcript",
@@ -147,6 +161,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/users/:user_id/chats/:conversation_id",
             get(chat::get_user_chat).delete(chat::delete_user_chat),
         )
+        .route(
+            "/api/users/:user_id/chats/:conversation_id/events",
+            get(chat::stream_user_chat_events),
+        )
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
         .route(
             "/api/mux/import-upload-url",
@@ -165,12 +183,32 @@ async fn main() -> anyhow::Result<()> {
             post(assessment::handler::start_exam_attempt),
         )
         .route(
+            "/api/exams/:attempt_id",
+            get(assessment::handler::get_attempt_status),
+        )
+        .route(
+            "/api/exams/:attempt_id/events",
+            get(assessment::handler::stream_attempt_events),
+        )
+        .route(
             "/api/exams/:attempt_id/submit",
             post(assessment::handler::submit_attempt),
         )
         .route(
             "/api/exams/:attempt_id/answers/:answer_id/justification",
             get(assessment::handler::get_justification),
+        )
+        .route(
+            "/api/exams/:attempt_id/answers/:answer_id/justification/start",
+            post(assessment::handler::start_justification),
+        )
+        .route(
+            "/api/exams/:attempt_id/answers/:answer_id/justification/status",
+            get(assessment::handler::get_justification_status),
+        )
+        .route(
+            "/api/exams/:attempt_id/answers/:answer_id/justification/events",
+            get(assessment::handler::stream_justification_events),
         )
         .merge(frontend::router())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
