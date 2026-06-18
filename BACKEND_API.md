@@ -168,6 +168,24 @@ Response:
 }
 ```
 
+### `DELETE /api/courses/{course_id}`
+
+Deletes an empty course. If the course still contains videos, the endpoint returns `409 Conflict`; delete those videos first so lessons and their dependent transcripts, chats, questions, and attempts are not removed accidentally.
+
+```bash
+curl -X DELETE \
+  http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669
+```
+
+Response:
+
+```json
+{
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "deleted": true
+}
+```
+
 ## Videos
 
 Videos belong to a course through `videos.course_id`. Questions keep their source video through `questions.video_id`, so a course question can always be traced back to the video and transcript used for grading and justification.
@@ -457,7 +475,11 @@ Response:
 
 ### `POST /api/chats/{conversation_id}/messages`
 
-Saves the user's message immediately, marks the chat as waiting for the LLM response, queues the LLM work in the background, and returns immediately. A background worker asks the local Gemma model, saves the assistant response, and clears the waiting state. If the same chat is already waiting, the endpoint returns `409 Conflict` instead of starting a competing LLM request.
+Saves the user's message immediately, before semantic-cache lookup or LLM generation. Every cached or generated assistant response is also saved, so the complete message history remains available through the chat retrieval endpoints.
+
+The question is embedded with Ollama's `nomic-embed-text` model and compared, using pgvector cosine similarity, with cached questions for the same video. For short questions, the score also includes normalized subject-keyword overlap so paraphrases such as "What is Java?" and "Tell me about Java" can match even when the raw embedding score is weak. Candidates with no subject overlap require at least `0.92` cosine similarity, preventing mismatches such as a Spark question receiving a Java answer. Postgres performs indexed vector and lexical candidate lookups; the backend does not fetch all embeddings on every message. A combined match at or above `SEMANTIC_CACHE_THRESHOLD` returns the cached answer immediately without calling Gemma. Cache entries are scoped by video and embedding model, so questions from different videos cannot match each other.
+
+On a cache miss, the endpoint marks the chat as waiting, queues Gemma work in the background, and returns immediately. The background worker saves the assistant response, stores it in the semantic cache, and clears the waiting state. If Ollama is unavailable, the request falls back to the normal Gemma path. If the same chat is already waiting, the endpoint returns `409 Conflict` instead of starting a competing LLM request.
 
 When transcript segments are available, the backend selects relevant transcript context for the background LLM call. If the transcript is missing or the question is outside the video, the model can still answer using broader knowledge and should label that as outside-video context. The chat's stored messages are used as that chat's history/context.
 
@@ -496,9 +518,36 @@ Response:
   "user_message_id": "35e192cf-b493-4b82-b3a2-b5a8dd5060dd",
   "assistant_message_id": null,
   "answer": null,
-  "sources": []
+  "sources": [],
+  "cached": false,
+  "cache_similarity": null
 }
 ```
+
+On a semantic-cache hit, the same endpoint returns the saved answer synchronously:
+
+```json
+{
+  "conversation_id": "97fa16f9-d84a-47ef-a752-8a5563c144cf",
+  "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "name": "Exam prep questions",
+  "is_waiting": false,
+  "user_message_id": "35e192cf-b493-4b82-b3a2-b5a8dd5060dd",
+  "assistant_message_id": "599f37bb-e544-4485-b211-df62dcf36983",
+  "answer": "The introduction explains...",
+  "sources": [],
+  "cached": true,
+  "cache_similarity": 0.94
+}
+```
+
+Semantic cache configuration:
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API base URL |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `SEMANTIC_CACHE_THRESHOLD` | `0.70` | Minimum cosine similarity for a cache hit |
 
 ### `GET /api/users/{user_id}/chats`
 
@@ -553,6 +602,8 @@ Response:
       "role": "user",
       "content": "What should I remember from the introduction?",
       "sources": [],
+      "cached": false,
+      "cache_similarity": null,
       "created_at": "2026-06-13T10:17:00Z"
     },
     {
@@ -567,6 +618,8 @@ Response:
           "text": "Welcome to the lecture."
         }
       ],
+      "cached": true,
+      "cache_similarity": 0.94,
       "created_at": "2026-06-13T10:17:03Z"
     }
   ]

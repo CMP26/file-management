@@ -11,6 +11,9 @@ pub struct Config {
     pub gemma_model: String,
     pub gemma_max_concurrent_requests: usize,
     pub gemma_request_timeout_seconds: u64,
+    pub ollama_base_url: String,
+    pub embedding_model: String,
+    pub semantic_cache_threshold: f32,
     pub whisper_url: String,
     pub tmp_dir: String,
     pub bind_addr: String,
@@ -28,10 +31,31 @@ impl Config {
             gemma_model: env_or("GEMMA_MODEL", "ggml-org/gemma-4-E4B-it-GGUF"),
             gemma_max_concurrent_requests: env_or_usize("GEMMA_MAX_CONCURRENT_REQUESTS", 2)?,
             gemma_request_timeout_seconds: env_or_u64("GEMMA_REQUEST_TIMEOUT_SECONDS", 300)?,
+            ollama_base_url: env_or("OLLAMA_BASE_URL", "http://localhost:11434"),
+            embedding_model: env_or("EMBEDDING_MODEL", "nomic-embed-text"),
+            semantic_cache_threshold: env_or_f32("SEMANTIC_CACHE_THRESHOLD", 0.70)?,
             whisper_url: env_or("WHISPER_URL", "http://localhost:8000"),
             tmp_dir: env_or("TMP_DIR", "/tmp/nexalearn"),
             bind_addr: env_or("BIND_ADDR", "0.0.0.0:8080"),
         })
+    }
+}
+
+fn env_or_f32(name: &str, default: f32) -> AppResult<f32> {
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse::<f32>()
+            .map_err(|_| AppError::bad_request(format!("{name} must be a number")))
+            .and_then(|value| {
+                if (0.0..=1.0).contains(&value) {
+                    Ok(value)
+                } else {
+                    Err(AppError::bad_request(format!(
+                        "{name} must be between 0 and 1"
+                    )))
+                }
+            }),
+        Err(_) => Ok(default),
     }
 }
 

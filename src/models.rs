@@ -155,6 +155,12 @@ pub struct CreateCourseRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DeleteCourseResponse {
+    pub course_id: Uuid,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SourceVideoResponse {
     pub id: Uuid,
     pub title: String,
@@ -389,6 +395,8 @@ pub struct TranscriptChatResponse {
     pub assistant_message_id: Option<Uuid>,
     pub answer: Option<String>,
     pub sources: Vec<TranscriptChatSource>,
+    pub cached: bool,
+    pub cache_similarity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -397,6 +405,8 @@ pub struct TranscriptChatMessageResponse {
     pub role: String,
     pub content: String,
     pub sources: Vec<TranscriptChatSource>,
+    pub cached: bool,
+    pub cache_similarity: Option<f32>,
     pub created_at: DateTime<Utc>,
 }
 

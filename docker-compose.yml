@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: nexalearn
       POSTGRES_USER: nexalearn
@@ -75,6 +75,9 @@ services:
       GEMMA_MODEL: ${GEMMA_MODEL:-ggml-org/gemma-4-E4B-it-GGUF}
       GEMMA_MAX_CONCURRENT_REQUESTS: ${GEMMA_MAX_CONCURRENT_REQUESTS:-2}
       GEMMA_REQUEST_TIMEOUT_SECONDS: ${GEMMA_REQUEST_TIMEOUT_SECONDS:-300}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      SEMANTIC_CACHE_THRESHOLD: ${SEMANTIC_CACHE_THRESHOLD:-0.70}
       WHISPER_URL: http://whisper:8000
       TMP_DIR: /tmp/nexalearn
       BIND_ADDR: 0.0.0.0:8080

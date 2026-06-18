@@ -1,6 +1,6 @@
 use crate::{
-    config::Config, db::pool::Pool, llm::gemma::GemmaClient, storage::rustfs::RustFsClient,
-    whisper::client::WhisperClient,
+    config::Config, db::pool::Pool, embedding::OllamaEmbeddingClient, llm::gemma::GemmaClient,
+    storage::rustfs::RustFsClient, whisper::client::WhisperClient,
 };
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -11,6 +11,7 @@ pub struct AppState {
     pub pool: Pool,
     pub storage: RustFsClient,
     pub gemma: GemmaClient,
+    pub embeddings: OllamaEmbeddingClient,
     pub whisper: WhisperClient,
     pub chat_events: broadcast::Sender<Uuid>,
     pub video_events: broadcast::Sender<Uuid>,
@@ -24,6 +25,7 @@ impl AppState {
         pool: Pool,
         storage: RustFsClient,
         gemma: GemmaClient,
+        embeddings: OllamaEmbeddingClient,
         whisper: WhisperClient,
     ) -> Self {
         let (chat_events, _) = broadcast::channel(256);
@@ -35,6 +37,7 @@ impl AppState {
             pool,
             storage,
             gemma,
+            embeddings,
             whisper,
             chat_events,
             video_events,

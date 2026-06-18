@@ -4,8 +4,8 @@ use axum::{
     Router,
 };
 use nexalearn_backend::{
-    assessment, chat, config::Config, courses, db, frontend, ingestion, llm, storage, videos,
-    whisper, AppState,
+    assessment, chat, config::Config, courses, db, embedding, frontend, ingestion, llm, storage,
+    videos, whisper, AppState,
 };
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -18,6 +18,7 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::llm::handler::get_llm_status,
         nexalearn_backend::courses::list_courses,
         nexalearn_backend::courses::create_course,
+        nexalearn_backend::courses::delete_course,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
         nexalearn_backend::videos::stream_video_events,
@@ -52,6 +53,7 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::CourseResponse,
             nexalearn_backend::models::CourseListResponse,
             nexalearn_backend::models::CreateCourseRequest,
+            nexalearn_backend::models::DeleteCourseResponse,
             nexalearn_backend::models::SourceVideoResponse,
             nexalearn_backend::models::VideoOverview,
             nexalearn_backend::models::VideoListResponse,
@@ -121,10 +123,12 @@ async fn main() -> anyhow::Result<()> {
         config.gemma_max_concurrent_requests,
         config.gemma_request_timeout_seconds,
     );
+    let embeddings =
+        embedding::OllamaEmbeddingClient::new(&config.ollama_base_url, &config.embedding_model);
     let whisper = whisper::client::WhisperClient::new(&config.whisper_url);
 
     let bind_addr = config.bind_addr.clone();
-    let state = AppState::new(config, pool, storage, gemma, whisper);
+    let state = AppState::new(config, pool, storage, gemma, embeddings, whisper);
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -132,6 +136,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/courses",
             get(courses::list_courses).post(courses::create_course),
+        )
+        .route(
+            "/api/courses/:course_id",
+            axum::routing::delete(courses::delete_course),
         )
         .route("/api/videos", get(videos::list_videos))
         .route(

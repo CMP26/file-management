@@ -1,0 +1,3 @@
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS cached BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS cache_similarity REAL;

@@ -21,6 +21,8 @@ use uuid::Uuid;
 
 #[path = "chat/prompt.rs"]
 mod prompt;
+#[path = "chat/semantic_cache.rs"]
+mod semantic_cache;
 
 #[derive(Debug, Clone)]
 struct TranscriptSegment {
@@ -36,6 +38,8 @@ struct ChatMessageRow {
     role: String,
     content: String,
     sources_json: Option<String>,
+    cached: bool,
+    cache_similarity: Option<f32>,
     created_at: DateTime<Utc>,
 }
 
@@ -153,13 +157,59 @@ pub async fn send_chat_message(
     };
 
     let user_message_id =
-        insert_chat_message(&state, conversation_id, "user", message, &[]).await?;
+        insert_chat_message(&state, conversation_id, "user", message, &[], false, None).await?;
+
+    let question_embedding = match semantic_cache::lookup(&state, conversation.video_id, message)
+        .await
+    {
+        Ok((_embedding, Some(hit))) => {
+            let assistant_message_id = insert_chat_message(
+                &state,
+                conversation_id,
+                "assistant",
+                &hit.answer,
+                &hit.sources,
+                true,
+                Some(hit.similarity),
+            )
+            .await?;
+            if let Err(error) = semantic_cache::record_hit(&state, hit.id).await {
+                tracing::warn!(cache_id = %hit.id, error = %error, "failed to record semantic cache hit");
+            }
+            let _ = state.chat_events.send(conversation_id);
+            tracing::info!(
+                conversation_id = %conversation_id,
+                video_id = %conversation.video_id,
+                similarity = hit.similarity,
+                "semantic chat cache hit"
+            );
+            return Ok(Json(TranscriptChatResponse {
+                conversation_id,
+                video_id: conversation.video_id,
+                name: conversation.name,
+                is_waiting: false,
+                user_message_id,
+                assistant_message_id: Some(assistant_message_id),
+                answer: Some(hit.answer),
+                sources: hit.sources,
+                cached: true,
+                cache_similarity: Some(hit.similarity),
+            }));
+        }
+        Ok((embedding, None)) => Some(embedding),
+        Err(error) => {
+            tracing::warn!(conversation_id = %conversation_id, error = %error, "semantic cache unavailable; falling back to Gemma");
+            None
+        }
+    };
+
     set_conversation_waiting(&state, conversation_id, true).await?;
 
     let worker_state = state.clone();
     let worker_conversation = conversation.clone();
     let worker_message = message.to_string();
     let worker_history = prompt_history.clone();
+    let worker_embedding = question_embedding;
     tokio::spawn(async move {
         if let Err(error) = complete_chat_message(
             worker_state,
@@ -167,6 +217,7 @@ pub async fn send_chat_message(
             worker_conversation,
             worker_message,
             worker_history,
+            worker_embedding,
         )
         .await
         {
@@ -183,6 +234,8 @@ pub async fn send_chat_message(
         assistant_message_id: None,
         answer: None,
         sources: Vec::new(),
+        cached: false,
+        cache_similarity: None,
     }))
 }
 
@@ -192,16 +245,40 @@ async fn complete_chat_message(
     conversation: ConversationContext,
     message: String,
     prompt_history: Vec<TranscriptChatMessage>,
+    question_embedding: Option<Vec<f32>>,
 ) -> AppResult<()> {
     tracing::info!(conversation_id = %conversation_id, "chat llm worker started");
 
     let result = generate_chat_answer(&state, &conversation, &message, &prompt_history).await;
     match result {
         Ok((answer, sources)) => {
-            match insert_chat_message(&state, conversation_id, "assistant", &answer, &sources).await
+            match insert_chat_message(
+                &state,
+                conversation_id,
+                "assistant",
+                &answer,
+                &sources,
+                false,
+                None,
+            )
+            .await
             {
                 Ok(_) => {
                     tracing::info!(conversation_id = %conversation_id, "chat llm worker saved assistant response");
+                    if let Some(embedding) = question_embedding {
+                        if let Err(error) = semantic_cache::store(
+                            &state,
+                            conversation.video_id,
+                            &message,
+                            &embedding,
+                            &answer,
+                            &sources,
+                        )
+                        .await
+                        {
+                            tracing::warn!(conversation_id = %conversation_id, error = %error, "failed to store semantic chat cache entry");
+                        }
+                    }
                 }
                 Err(error) => {
                     tracing::error!(conversation_id = %conversation_id, error = %error, "chat llm worker failed to save assistant response");
@@ -212,8 +289,16 @@ async fn complete_chat_message(
             let fallback = format!(
                 "I could not get a response from the LLM for this message. Please try again. Error: {error}"
             );
-            if let Err(insert_error) =
-                insert_chat_message(&state, conversation_id, "assistant", &fallback, &[]).await
+            if let Err(insert_error) = insert_chat_message(
+                &state,
+                conversation_id,
+                "assistant",
+                &fallback,
+                &[],
+                false,
+                None,
+            )
+            .await
             {
                 tracing::error!(conversation_id = %conversation_id, error = %insert_error, "chat llm worker failed to save fallback response");
             }
@@ -640,6 +725,8 @@ async fn insert_chat_message(
     role: &str,
     content: &str,
     sources: &[TranscriptChatSource],
+    cached: bool,
+    cache_similarity: Option<f32>,
 ) -> AppResult<Uuid> {
     let sources_json = if sources.is_empty() {
         None
@@ -649,8 +736,9 @@ async fn insert_chat_message(
 
     let message_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO chat_messages (conversation_id, role, content, sources_json)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO chat_messages
+            (conversation_id, role, content, sources_json, cached, cache_similarity)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
     )
@@ -658,6 +746,8 @@ async fn insert_chat_message(
     .bind(role)
     .bind(content)
     .bind(sources_json)
+    .bind(cached)
+    .bind(cache_similarity)
     .fetch_one(&state.pool)
     .await?;
 
@@ -668,9 +758,20 @@ async fn load_chat_messages(
     state: &AppState,
     conversation_id: Uuid,
 ) -> AppResult<Vec<ChatMessageRow>> {
-    let rows = sqlx::query_as::<_, (Uuid, String, String, Option<String>, DateTime<Utc>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            Option<String>,
+            bool,
+            Option<f32>,
+            DateTime<Utc>,
+        ),
+    >(
         r#"
-        SELECT id, role, content, sources_json, created_at
+        SELECT id, role, content, sources_json, cached, cache_similarity, created_at
         FROM chat_messages
         WHERE conversation_id = $1
         ORDER BY created_at ASC
@@ -681,11 +782,13 @@ async fn load_chat_messages(
     .await?
     .into_iter()
     .map(
-        |(id, role, content, sources_json, created_at)| ChatMessageRow {
+        |(id, role, content, sources_json, cached, cache_similarity, created_at)| ChatMessageRow {
             id,
             role,
             content,
             sources_json,
+            cached,
+            cache_similarity,
             created_at,
         },
     )
@@ -729,6 +832,8 @@ fn message_response_from_row(row: ChatMessageRow) -> TranscriptChatMessageRespon
             .as_deref()
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default(),
+        cached: row.cached,
+        cache_similarity: row.cache_similarity,
         created_at: row.created_at,
     }
 }

@@ -21,7 +21,6 @@ import {
   LoaderCircle,
   Menu,
   MessageSquare,
-  MoreVertical,
   Play,
   Plus,
   RefreshCw,
@@ -37,7 +36,11 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const USER_ID = "11111111-1111-4111-8111-111111111111";
+const STUDENTS = [
+  { id: "11111111-1111-4111-8111-111111111111", name: "Ahmed" },
+  { id: "22222222-2222-4222-8222-222222222222", name: "Mariam" },
+  { id: "33333333-3333-4333-8333-333333333333", name: "Omar" }
+];
 const API_BASE = window.location.origin === "null" ? "http://localhost:8080" : window.location.origin;
 const TERMINAL_VIDEO_STATUSES = new Set(["ready", "failed"]);
 
@@ -104,8 +107,12 @@ function App() {
   const [courseOpen, setCourseOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [studentId, setStudentId] = useState(
+    () => window.localStorage.getItem("nexalearnStudentId") || STUDENTS[0].id
+  );
 
   const selectedVideo = videos.find((video) => video.id === selectedVideoId) || null;
+  const selectedStudent = STUDENTS.find((student) => student.id === studentId) || STUDENTS[0];
 
   const notify = (message, tone = "neutral") => {
     setToast({ message, tone });
@@ -161,9 +168,39 @@ function App() {
     setMobileNav(false);
   };
 
+  const switchStudent = (nextStudentId) => {
+    setStudentId(nextStudentId);
+    window.localStorage.setItem("nexalearnStudentId", nextStudentId);
+  };
+
   const openStudyRoom = (videoId) => {
     setSelectedVideoId(videoId);
     navigate("study");
+  };
+
+  const deleteLesson = async (video) => {
+    if (!window.confirm(`Delete "${video.title}" and all generated data?`)) return;
+    try {
+      await api(`/api/videos/${video.id}`, { method: "DELETE" });
+      if (selectedVideoId === video.id) {
+        setSelectedVideoId(videos.find((item) => item.id !== video.id)?.id || null);
+      }
+      await loadCore(true);
+      notify("Lesson deleted.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const deleteCourse = async (course) => {
+    if (!window.confirm(`Delete course "${course.title}"?`)) return;
+    try {
+      await api(`/api/courses/${course.id}`, { method: "DELETE" });
+      await loadCore(true);
+      notify("Course deleted.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
   };
 
   const stats = useMemo(() => ({
@@ -224,8 +261,10 @@ function App() {
         <div className="profile-strip">
           <div className="avatar"><UserRound size={17} /></div>
           <div>
-            <strong>Test learner</strong>
-            <span title={USER_ID}>{shortId(USER_ID)}</span>
+            <select className="student-switcher" value={studentId} onChange={(event) => switchStudent(event.target.value)}>
+              {STUDENTS.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
+            </select>
+            <span title={studentId}>{shortId(studentId)}</span>
           </div>
         </div>
       </aside>
@@ -273,6 +312,8 @@ function App() {
                   videos={videos}
                   createCourse={() => setCourseOpen(true)}
                   openStudyRoom={openStudyRoom}
+                  deleteCourse={deleteCourse}
+                  deleteLesson={deleteLesson}
                 />
               )}
               {view === "library" && (
@@ -282,6 +323,7 @@ function App() {
                   openStudyRoom={openStudyRoom}
                   openUpload={() => setUploadOpen(true)}
                   refresh={() => loadCore(true)}
+                  deleteLesson={deleteLesson}
                 />
               )}
               {view === "question-bank" && (
@@ -289,11 +331,14 @@ function App() {
               )}
               {view === "study" && (
                 <StudyRoom
+                  key={`${selectedVideoId || "none"}:${studentId}`}
                   videos={videos}
                   selectedVideoId={selectedVideoId}
                   setSelectedVideoId={setSelectedVideoId}
                   refreshVideos={() => loadCore(true)}
                   notify={notify}
+                  userId={studentId}
+                  studentName={selectedStudent.name}
                 />
               )}
             </>
@@ -419,11 +464,13 @@ function StatItem({ label, value, icon: Icon, tone }) {
   );
 }
 
-function CoursesView({ courses, videos, createCourse, openStudyRoom }) {
+function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCourse, deleteLesson }) {
   const [selectedCourseId, setSelectedCourseId] = useState(courses[0]?.id || null);
   useEffect(() => {
-    if (!selectedCourseId && courses.length) setSelectedCourseId(courses[0].id);
-  }, [courses]);
+    if (!courses.some((course) => course.id === selectedCourseId)) {
+      setSelectedCourseId(courses[0]?.id || null);
+    }
+  }, [courses, selectedCourseId]);
   const selected = courses.find((course) => course.id === selectedCourseId);
   const lessons = videos.filter((video) => video.course_id === selectedCourseId);
 
@@ -462,9 +509,14 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom }) {
                   <h2>{selected.title}</h2>
                   <p>{selected.description || "No course description yet."}</p>
                 </div>
-                <div className="detail-metrics">
-                  <span><strong>{selected.video_count}</strong> lessons</span>
-                  <span><strong>{selected.question_count}</strong> questions</span>
+                <div className="detail-title-actions">
+                  <div className="detail-metrics">
+                    <span><strong>{selected.video_count}</strong> lessons</span>
+                    <span><strong>{selected.question_count}</strong> questions</span>
+                  </div>
+                  <button className="icon-button danger" onClick={() => deleteCourse(selected)} title="Delete course">
+                    <Trash2 size={17} />
+                  </button>
                 </div>
               </div>
               <div className="section-header inset">
@@ -472,12 +524,17 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom }) {
               </div>
               <div className="content-list">
                 {lessons.map((video) => (
-                  <button key={video.id} className="content-row" onClick={() => openStudyRoom(video.id)}>
-                    <div className="lesson-symbol"><Video size={17} /></div>
-                    <div><strong>{video.title}</strong><span>{formatDuration(video.duration_s)} · {video.question_count} questions</span></div>
-                    <StatusPill status={video.status} />
-                    <ChevronRight size={17} />
-                  </button>
+                  <div key={video.id} className="content-row">
+                    <button className="content-row-main" onClick={() => openStudyRoom(video.id)}>
+                      <div className="lesson-symbol"><Video size={17} /></div>
+                      <div><strong>{video.title}</strong><span>{formatDuration(video.duration_s)} · {video.question_count} questions</span></div>
+                      <StatusPill status={video.status} />
+                      <ChevronRight size={17} />
+                    </button>
+                    <button className="icon-button danger row-delete" onClick={() => deleteLesson(video)} title="Delete lesson">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 ))}
                 {!lessons.length && <EmptyState icon={ListVideo} title="No lessons in this course" body="Use Add lesson to upload one." />}
               </div>
@@ -489,7 +546,7 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom }) {
   );
 }
 
-function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh }) {
+function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, deleteLesson }) {
   const [query, setQuery] = useState("");
   const [courseId, setCourseId] = useState("");
   const [status, setStatus] = useState("");
@@ -522,22 +579,26 @@ function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh }) {
         </div>
         <div className="library-grid">
           {filtered.map((video) => (
-            <button className="lesson-tile" key={video.id} onClick={() => openStudyRoom(video.id)}>
-              <div className="lesson-preview">
-                <div className="preview-course">{video.course_title}</div>
-                <div className="preview-play"><Play size={20} fill="currentColor" /></div>
-                <span>{formatDuration(video.duration_s)}</span>
-              </div>
+            <article className="lesson-tile" key={video.id}>
+              <button className="lesson-tile-open" onClick={() => openStudyRoom(video.id)}>
+                <div className="lesson-preview">
+                  <div className="preview-course">{video.course_title}</div>
+                  <div className="preview-play"><Play size={20} fill="currentColor" /></div>
+                  <span>{formatDuration(video.duration_s)}</span>
+                </div>
+              </button>
               <div className="tile-body">
                 <div><h3>{video.title}</h3><p>{formatDate(video.created_at)}</p></div>
-                <MoreVertical size={17} />
+                <button className="icon-button danger tile-delete" onClick={() => deleteLesson(video)} title="Delete lesson">
+                  <Trash2 size={16} />
+                </button>
               </div>
               <div className="tile-footer">
                 <StatusPill status={video.status} />
                 <span>{video.topic_count} topics</span>
                 <span>{video.question_count} questions</span>
               </div>
-            </button>
+            </article>
           ))}
           {!filtered.length && <EmptyState icon={FolderOpen} title="No matching lessons" body="Change the filters or upload new media." />}
         </div>
@@ -627,7 +688,7 @@ function QuestionBankView({ courses, videos, notify }) {
   );
 }
 
-function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos, notify }) {
+function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos, notify, userId, studentName }) {
   const [detail, setDetail] = useState(null);
   const [transcript, setTranscript] = useState(null);
   const [tab, setTab] = useState("lesson");
@@ -718,8 +779,8 @@ function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos,
               <LessonTab detail={detail} videoId={selectedVideoId} playerRef={playerRef} seek={seek} transcript={transcript} notify={notify} refreshVideos={refreshVideos} />
             )}
             {tab === "transcript" && <TranscriptTab transcript={transcript} seek={seek} />}
-            {tab === "chat" && <ChatTab videoId={selectedVideoId} playerRef={playerRef} notify={notify} />}
-            {tab === "assessment" && <AssessmentTab videoId={selectedVideoId} notify={notify} />}
+            {tab === "chat" && <ChatTab videoId={selectedVideoId} playerRef={playerRef} notify={notify} userId={userId} studentName={studentName} />}
+            {tab === "assessment" && <AssessmentTab videoId={selectedVideoId} notify={notify} userId={userId} />}
           </>
         )}
       </section>
@@ -810,7 +871,7 @@ function TranscriptTab({ transcript, seek }) {
   );
 }
 
-function ChatTab({ videoId, playerRef, notify }) {
+function ChatTab({ videoId, playerRef, notify, userId, studentName }) {
   const [chats, setChats] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [active, setActive] = useState(null);
@@ -819,7 +880,7 @@ function ChatTab({ videoId, playerRef, notify }) {
 
   const loadChats = async (preferredId) => {
     try {
-      const data = await api(`/api/users/${USER_ID}/chats?video_id=${videoId}`);
+      const data = await api(`/api/users/${userId}/chats?video_id=${videoId}`);
       setChats(data.chats || []);
       const next = preferredId || activeId || data.chats?.[0]?.conversation_id;
       if (next) await loadChat(next);
@@ -830,16 +891,20 @@ function ChatTab({ videoId, playerRef, notify }) {
   };
 
   const loadChat = async (conversationId) => {
-    const data = await api(`/api/users/${USER_ID}/chats/${conversationId}`);
+    const data = await api(`/api/users/${userId}/chats/${conversationId}`);
     setActiveId(conversationId);
     setActive(data);
   };
 
-  useEffect(() => { loadChats(); }, [videoId]);
+  useEffect(() => {
+    setActiveId(null);
+    setActive(null);
+    loadChats();
+  }, [videoId, userId]);
 
   useEffect(() => {
     if (!activeId || !active?.is_waiting) return undefined;
-    const stream = new EventSource(`${API_BASE}/api/users/${USER_ID}/chats/${activeId}/events`);
+    const stream = new EventSource(`${API_BASE}/api/users/${userId}/chats/${activeId}/events`);
     stream.addEventListener("chat", (event) => {
       const snapshot = JSON.parse(event.data);
       setActive(snapshot);
@@ -856,7 +921,7 @@ function ChatTab({ videoId, playerRef, notify }) {
     const data = await api(`/api/videos/${videoId}/chats`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ user_id: USER_ID, name: name.trim() || `Study chat ${chats.length + 1}` })
+      body: JSON.stringify({ user_id: userId, name: name.trim() || `Study chat ${chats.length + 1}` })
     });
     setName("");
     await loadChats(data.conversation_id);
@@ -870,14 +935,17 @@ function ChatTab({ videoId, playerRef, notify }) {
     setActive((current) => ({
       ...current,
       is_waiting: true,
-      messages: [...(current?.messages || []), { id: crypto.randomUUID(), role: "user", content: value, sources: [] }]
+      messages: [...(current?.messages || []), { id: crypto.randomUUID(), role: "user", content: value, sources: [], cached: false, cache_similarity: null }]
     }));
     try {
-      await api(`/api/chats/${activeId}/messages`, {
+      const response = await api(`/api/chats/${activeId}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ user_id: USER_ID, message: value, history: [] })
+        body: JSON.stringify({ user_id: userId, message: value, history: [] })
       });
+      if (response.cached) {
+        notify(`Semantic cache hit (${Math.round(response.cache_similarity * 100)}% similar).`, "success");
+      }
       await loadChat(activeId);
     } catch (error) {
       notify(error.message, "danger");
@@ -887,7 +955,7 @@ function ChatTab({ videoId, playerRef, notify }) {
 
   const remove = async () => {
     if (!activeId || !window.confirm(`Delete "${active?.name}"?`)) return;
-    await api(`/api/users/${USER_ID}/chats/${activeId}`, { method: "DELETE" });
+    await api(`/api/users/${userId}/chats/${activeId}`, { method: "DELETE" });
     await loadChats();
   };
 
@@ -917,7 +985,7 @@ function ChatTab({ videoId, playerRef, notify }) {
         {active ? (
           <>
             <div className="chat-header">
-              <div><h2>{active.name}</h2><span>{active.video_title}</span></div>
+              <div><h2>{active.name}</h2><span>{studentName} · {active.video_title}</span></div>
               <button className="icon-button danger" onClick={remove} title="Delete chat"><Trash2 size={17} /></button>
             </div>
             <div className="message-feed">
@@ -925,7 +993,19 @@ function ChatTab({ videoId, playerRef, notify }) {
                 <div key={item.id} className={classNames("message", item.role)}>
                   <div className="message-avatar">{item.role === "assistant" ? <Bot size={16} /> : <UserRound size={16} />}</div>
                   <div>
-                    <span>{item.role === "assistant" ? "Nexa" : "You"}</span>
+                    <div className="message-meta">
+                      <span>{item.role === "assistant" ? "Nexa" : "You"}</span>
+                      {item.role === "assistant" && (
+                        <span
+                          className={classNames("response-origin", item.cached ? "cache" : "llm")}
+                          title={item.cached ? `Semantic cache match: ${Math.round((item.cache_similarity || 0) * 100)}%` : "Generated by Gemma"}
+                        >
+                          {item.cached
+                            ? `Semantic cache · ${Math.round((item.cache_similarity || 0) * 100)}%`
+                            : "Gemma · live response"}
+                        </span>
+                      )}
+                    </div>
                     <p>{item.content}</p>
                     {!!item.sources?.length && (
                       <div className="message-sources">
@@ -952,7 +1032,7 @@ function ChatTab({ videoId, playerRef, notify }) {
   );
 }
 
-function AssessmentTab({ videoId, notify }) {
+function AssessmentTab({ videoId, notify, userId }) {
   const [groups, setGroups] = useState([]);
   const [attemptId, setAttemptId] = useState(null);
   const [answers, setAnswers] = useState({});
@@ -977,13 +1057,13 @@ function AssessmentTab({ videoId, notify }) {
     }
   };
 
-  useEffect(() => { loadQuestions(); }, [videoId]);
+  useEffect(() => { loadQuestions(); }, [videoId, userId]);
 
   const start = async () => {
     const data = await api(`/api/videos/${videoId}/exams/start`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ user_id: USER_ID })
+      body: JSON.stringify({ user_id: userId })
     });
     setAttemptId(data.attempt_id);
     notify("Attempt started.", "success");

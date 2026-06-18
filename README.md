@@ -31,6 +31,7 @@ Install these on the host machine:
 - Rust/Cargo
 - `ffmpeg`
 - `llama-server`
+- Ollama
 - Your Gemma GGUF model
 
 Docker still runs PostgreSQL, MinIO/RustFS, and Whisper, so you do not need to install those locally.
@@ -55,6 +56,18 @@ For the hybrid workflow, `--host 0.0.0.0` is not required because the backend al
 curl http://localhost:8100/v1/models
 ```
 
+Pull the embedding model used by semantic chat caching:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+Check Ollama before continuing:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
 ### 2. Start Docker infrastructure
 
 In a second terminal:
@@ -65,7 +78,7 @@ In a second terminal:
 
 This starts only:
 
-- PostgreSQL on `localhost:5432`
+- PostgreSQL with pgvector on `localhost:5432`
 - MinIO/RustFS on `localhost:9000` and console on `localhost:9001`
 - Whisper on `localhost:8000`
 
@@ -91,10 +104,15 @@ GEMMA_BASE_URL=http://localhost:8100
 GEMMA_MODEL=ggml-org/gemma-4-E4B-it-GGUF
 GEMMA_MAX_CONCURRENT_REQUESTS=2
 GEMMA_REQUEST_TIMEOUT_SECONDS=300
+OLLAMA_BASE_URL=http://localhost:11434
+EMBEDDING_MODEL=nomic-embed-text
+SEMANTIC_CACHE_THRESHOLD=0.70
 BIND_ADDR=127.0.0.1:8080
 ```
 
 `GEMMA_MAX_CONCURRENT_REQUESTS` defaults to `2` so Gemma can keep one request active while another queued generation is allowed through. Failed or overloaded generations are retried automatically; adjust this value only if your LLM server needs stricter or looser concurrency.
+
+Chat questions are embedded with Ollama and compared against cached questions for the same video using pgvector cosine similarity. Short-question retrieval combines cosine similarity with normalized subject-keyword overlap so obvious paraphrases are retained while subject mismatches are rejected. Vector-only matches require a strict `0.92` score. The database performs indexed vector and lexical candidate lookups; embeddings are not fetched into the backend for a full scan. A combined score at or above `SEMANTIC_CACHE_THRESHOLD` returns the cached answer without calling Gemma. If Ollama is unavailable, the chat pipeline falls back to Gemma.
 
 The backend runs migrations automatically on startup.
 

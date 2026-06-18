@@ -1,8 +1,11 @@
 use crate::{
-    models::{CourseListResponse, CourseResponse, CreateCourseRequest},
+    models::{CourseListResponse, CourseResponse, CreateCourseRequest, DeleteCourseResponse},
     AppError, AppResult, AppState,
 };
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -105,6 +108,54 @@ pub async fn create_course(
     .await?;
 
     Ok(Json(row.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/courses/{course_id}",
+    tag = "Courses",
+    params(
+        ("course_id" = Uuid, Path, description = "Course id")
+    ),
+    responses(
+        (status = 200, description = "Course deleted", body = DeleteCourseResponse),
+        (status = 404, description = "Course not found"),
+        (status = 409, description = "Course still contains videos"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn delete_course(
+    State(state): State<AppState>,
+    Path(course_id): Path<Uuid>,
+) -> AppResult<Json<DeleteCourseResponse>> {
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM courses WHERE id = $1 FOR UPDATE")
+        .bind(course_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| AppError::not_found(format!("course {course_id} was not found")))?;
+
+    let video_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM videos WHERE course_id = $1")
+            .bind(course_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    if video_count > 0 {
+        return Err(AppError::conflict(format!(
+            "course {course_id} contains {video_count} video(s); delete them first"
+        )));
+    }
+
+    sqlx::query("DELETE FROM courses WHERE id = $1")
+        .bind(course_id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    Ok(Json(DeleteCourseResponse {
+        course_id,
+        deleted: true,
+    }))
 }
 
 fn course_overview_sql() -> &'static str {

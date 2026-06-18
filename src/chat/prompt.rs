@@ -5,7 +5,7 @@ const CHAT_WINDOW_TURNS: usize = 8;
 
 pub(super) fn build_transcript_chat_prompt(
     video_title: &str,
-    summary: Option<&str>,
+    _summary: Option<&str>,
     message: &str,
     history: &[TranscriptChatMessage],
     segments: &[TranscriptSegment],
@@ -21,14 +21,7 @@ pub(super) fn build_transcript_chat_prompt(
 
     prompt.push_str(&format!("Video title: {video_title}\n"));
 
-    
-    /// I don't need the video summary, no need to include it in the prompt. The model can answer questions without it, and including it may lead to hallucinations if the summary is inaccurate.
-
-    // if let Some(summary) = summary {
-    //     prompt.push_str("Video summary:\n");
-    //     prompt.push_str(&truncate_chars(summary, 1_500));
-    //     prompt.push_str("\n\n");
-    // }
+    // The summary is intentionally excluded because transcript excerpts are the source of truth.
 
     // Transcript context is independent of the chat window and is always present.
     prompt.push_str("Transcript excerpts:\n");

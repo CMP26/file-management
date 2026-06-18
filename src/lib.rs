@@ -3,6 +3,7 @@ pub mod chat;
 pub mod config;
 pub mod courses;
 pub mod db;
+pub mod embedding;
 pub mod error;
 pub mod frontend;
 pub mod ingestion;

@@ -226,6 +226,22 @@ p {
   font-size: 12px;
 }
 
+.student-switcher {
+  width: 132px;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+  color: #eef4f1;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 0;
+}
+
+.student-switcher option {
+  background: #19251f;
+  color: #eef4f1;
+}
+
 .profile-strip span {
   color: #8ea198;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -566,7 +582,7 @@ p {
 }
 
 .lesson-copy,
-.content-row > div:nth-child(2) {
+.content-row-main > div:nth-child(2) {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -800,6 +816,12 @@ p {
   gap: 22px;
 }
 
+.detail-title-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
 .detail-metrics span {
   display: grid;
   gap: 2px;
@@ -819,16 +841,32 @@ p {
 
 .content-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto 16px;
+  grid-template-columns: minmax(0, 1fr) 36px;
   min-height: 62px;
   align-items: center;
-  gap: 11px;
+  gap: 6px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
-  cursor: pointer;
   padding: 8px 0;
   text-align: left;
+}
+
+.content-row-main {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto 16px;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.content-row .row-delete {
+  width: 32px;
+  height: 32px;
 }
 
 .filter-bar {
@@ -903,7 +941,6 @@ textarea::placeholder {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
-  cursor: pointer;
   overflow: hidden;
   padding: 0;
   text-align: left;
@@ -921,6 +958,16 @@ textarea::placeholder {
   place-items: center;
   background: #dce8e3;
   color: #214b40;
+}
+
+.lesson-tile-open {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
 }
 
 .lesson-preview::before {
@@ -966,9 +1013,15 @@ textarea::placeholder {
 
 .tile-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
   gap: 9px;
   padding: 13px 13px 10px;
+}
+
+.tile-delete {
+  width: 32px;
+  height: 32px;
 }
 
 .tile-body h3 {
@@ -1574,10 +1627,41 @@ textarea::placeholder {
   min-width: 0;
 }
 
-.message > div:last-child > span {
+.message-meta {
+  display: flex;
+  min-height: 18px;
+  align-items: center;
+  gap: 7px;
+}
+
+.message-meta > span:first-child {
   color: var(--muted);
   font-size: 9px;
   font-weight: 750;
+}
+
+.response-origin {
+  display: inline-flex;
+  min-height: 18px;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: #526059;
+  font-size: 9px;
+  font-weight: 750;
+  padding: 1px 5px;
+}
+
+.response-origin.cache {
+  border-color: #9bc9b7;
+  background: #e9f7f0;
+  color: #176247;
+}
+
+.response-origin.llm {
+  border-color: #b9c9df;
+  background: #eef4fb;
+  color: #315b8f;
 }
 
 .message p {
