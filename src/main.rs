@@ -26,7 +26,7 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::videos::get_video_transcript,
         nexalearn_backend::videos::get_video_transcript_vtt,
         nexalearn_backend::ingestion::handler::upload_video,
-        nexalearn_backend::ingestion::handler::import_mux_upload_url,
+        nexalearn_backend::ingestion::handler::import_mux_download_url,
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::get_course_random_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
@@ -47,8 +47,8 @@ use utoipa_swagger_ui::SwaggerUi;
     components(
         schemas(
             nexalearn_backend::models::UploadResponse,
-            nexalearn_backend::models::MuxImportUploadUrlRequest,
-            nexalearn_backend::models::MuxImportUploadUrlResponse,
+            nexalearn_backend::models::MuxImportDownloadUrlRequest,
+            nexalearn_backend::models::MuxImportDownloadUrlResponse,
             nexalearn_backend::models::CourseResponse,
             nexalearn_backend::models::CourseListResponse,
             nexalearn_backend::models::CreateCourseRequest,
@@ -167,8 +167,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/videos/upload", post(ingestion::handler::upload_video))
         .route(
+            "/api/mux/import-download-url",
+            post(ingestion::handler::import_mux_download_url),
+        )
+        .route(
             "/api/mux/import-upload-url",
-            post(ingestion::handler::import_mux_upload_url),
+            post(ingestion::handler::import_mux_download_url),
         )
         .route(
             "/api/videos/:video_id/questions",

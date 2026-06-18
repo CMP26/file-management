@@ -1269,7 +1269,7 @@
               <input id="muxTitle" type="text" placeholder="Mux lecture" required>
             </label>
             <label>
-              Mux video URL
+              Mux download URL
               <input id="muxUploadUrl" type="url" placeholder="https://..." required>
             </label>
             <label>
@@ -1744,24 +1744,24 @@
 
       setBusy(el.muxImportBtn, true, "Importing");
       try {
-        const data = await api("/api/mux/import-upload-url", {
+        const data = await api("/api/mux/import-download-url", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             title,
             course_id: courseId,
-            upload_url: uploadUrl,
+            download_url: uploadUrl,
             file_name: fileName || null
           })
         });
-        log("Mux URL import queued", data);
+        log("Mux download import queued", data);
         state.selectedVideoId = data.video_id;
         el.muxImportForm.reset();
         await refreshVideos(true);
         await selectVideo(data.video_id);
         openVideoEvents(data.video_id);
       } catch (error) {
-        log("Mux URL import failed", { error: error.message });
+        log("Mux download import failed", { error: error.message });
       } finally {
         setBusy(el.muxImportBtn, false);
       }

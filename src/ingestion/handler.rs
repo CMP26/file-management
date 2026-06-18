@@ -1,5 +1,5 @@
 use crate::{
-    models::{MuxImportUploadUrlRequest, MuxImportUploadUrlResponse, UploadResponse},
+    models::{MuxImportDownloadUrlRequest, MuxImportDownloadUrlResponse, UploadResponse},
     AppError, AppResult, AppState,
 };
 use axum::{
@@ -81,39 +81,48 @@ pub async fn upload_video(
 
 #[utoipa::path(
     post,
-    path = "/api/mux/import-upload-url",
+    path = "/api/mux/import-download-url",
     tag = "Mux",
-    request_body = MuxImportUploadUrlRequest,
+    request_body = MuxImportDownloadUrlRequest,
     responses(
-        (status = 200, description = "Mux-hosted video fetched and ingestion queued", body = MuxImportUploadUrlResponse),
+        (status = 200, description = "Mux-hosted video fetched and ingestion queued", body = MuxImportDownloadUrlResponse),
         (status = 400, description = "Bad request"),
         (status = 502, description = "Mux URL fetch failed"),
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn import_mux_upload_url(
+pub async fn import_mux_download_url(
     State(state): State<AppState>,
-    Json(payload): Json<MuxImportUploadUrlRequest>,
-) -> AppResult<Json<MuxImportUploadUrlResponse>> {
+    Json(payload): Json<MuxImportDownloadUrlRequest>,
+) -> AppResult<Json<MuxImportDownloadUrlResponse>> {
     let title = payload.title.trim();
     if title.is_empty() {
         return Err(AppError::bad_request("title cannot be empty"));
     }
     ensure_course_exists(&state, payload.course_id).await?;
 
-    let url = Url::parse(payload.upload_url.trim())
-        .map_err(|_| AppError::bad_request("upload_url must be a valid URL"))?;
+    let raw_download_url = payload
+        .download_url
+        .as_deref()
+        .or(payload.upload_url.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::bad_request("download_url is required"))?;
+    let url = Url::parse(raw_download_url)
+        .map_err(|_| AppError::bad_request("download_url must be a valid URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(AppError::bad_request("upload_url must use http or https"));
+        return Err(AppError::bad_request("download_url must use http or https"));
     }
 
     let response = reqwest::Client::new()
         .get(url.clone())
         .send()
         .await
-        .map_err(|error| AppError::external(format!("failed to fetch mux upload url: {error}")))?;
+        .map_err(|error| {
+            AppError::external(format!("failed to fetch mux download url: {error}"))
+        })?;
     let response = response.error_for_status().map_err(|error| {
-        AppError::external(format!("mux upload url returned an error: {error}"))
+        AppError::external(format!("mux download url returned an error: {error}"))
     })?;
 
     if let Some(content_length) = response.content_length() {
@@ -159,7 +168,7 @@ pub async fn import_mux_upload_url(
     )
     .await?;
 
-    Ok(Json(MuxImportUploadUrlResponse {
+    Ok(Json(MuxImportDownloadUrlResponse {
         video_id,
         course_id: payload.course_id,
         status: "pending".to_string(),

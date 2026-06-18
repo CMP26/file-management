@@ -41,7 +41,7 @@ For client implementations, deserialize SSE events as the matching `GET` respons
 
 | Operation | Starter response | Source-of-truth / SSE response |
 |---|---|---|
-| Video upload/import processing | `UploadResponse` or `MuxImportUploadUrlResponse` | `VideoDetailResponse` |
+| Video upload/import processing | `UploadResponse` or `MuxImportDownloadUrlResponse` | `VideoDetailResponse` |
 | Transcript chat response generation | `TranscriptChatResponse` | `TranscriptChatHistoryResponse` |
 | Exam answer grading | `SubmitAttemptResponse` | `AttemptStatusResponse` |
 | Answer justification generation | `JustificationStatusResponse` from `/justification/start` | `JustificationStatusResponse` |
@@ -235,11 +235,11 @@ Response:
 
 ## Mux Import
 
-### `POST /api/mux/import-upload-url`
+### `POST /api/mux/import-download-url`
 
-Imports a video from a URL provided by your Mux-facing backend, stores it in RustFS, creates a normal `videos` row, and starts the same transcription/question-generation pipeline used by multipart uploads.
+Imports a video from a downloadable URL provided by your Mux-facing service, stores it in RustFS, creates a normal `videos` row, and starts the same transcription/question-generation pipeline used by multipart uploads.
 
-This endpoint expects a URL that the backend can `GET` to download the media bytes. It does not create a Mux direct-upload URL for browser uploads.
+This endpoint expects a URL that this backend can `GET` to download the media bytes. It does not create a Mux direct-upload URL and does not handle uploading to Mux. The upload-to-Mux flow is expected to happen in another service.
 
 Request:
 
@@ -247,7 +247,7 @@ Request:
 {
   "title": "Mux uploaded lecture",
   "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
-  "upload_url": "https://example.com/path/to/video.mp4",
+  "download_url": "https://example.com/path/to/video.mp4",
   "file_name": "lecture.mp4"
 }
 ```
@@ -255,12 +255,12 @@ Request:
 `file_name` is optional. When it is omitted, the backend infers the stored file extension from the URL path or `content-type` response header.
 
 ```bash
-curl -X POST http://localhost:8080/api/mux/import-upload-url \
+curl -X POST http://localhost:8080/api/mux/import-download-url \
   -H "content-type: application/json" \
   -d '{
     "title": "Mux uploaded lecture",
     "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
-    "upload_url": "https://example.com/path/to/video.mp4",
+    "download_url": "https://example.com/path/to/video.mp4",
     "file_name": "lecture.mp4"
   }'
 ```
@@ -276,6 +276,8 @@ Response:
 ```
 
 The endpoint accepts `http` and `https` URLs and rejects remote media larger than 1 GiB.
+
+Backward compatibility: `POST /api/mux/import-upload-url` and the request field `upload_url` are still accepted as aliases, but new integrations should use `POST /api/mux/import-download-url` with `download_url`.
 
 ### `GET /api/videos/{video_id}`
 

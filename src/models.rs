@@ -118,15 +118,16 @@ pub struct UploadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MuxImportUploadUrlRequest {
+pub struct MuxImportDownloadUrlRequest {
     pub title: String,
     pub course_id: Uuid,
-    pub upload_url: String,
+    pub download_url: Option<String>,
+    pub upload_url: Option<String>,
     pub file_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MuxImportUploadUrlResponse {
+pub struct MuxImportDownloadUrlResponse {
     pub video_id: Uuid,
     pub course_id: Uuid,
     pub status: String,
