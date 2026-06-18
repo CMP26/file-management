@@ -19,6 +19,9 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
+#[path = "chat/prompt.rs"]
+mod prompt;
+
 #[derive(Debug, Clone)]
 struct TranscriptSegment {
     seq_index: i32,
@@ -142,9 +145,6 @@ pub async fn send_chat_message(
     } else {
         stored_history
             .iter()
-            .rev()
-            .take(8)
-            .rev()
             .map(|message| TranscriptChatMessage {
                 role: message.role.clone(),
                 content: message.content.clone(),
@@ -252,7 +252,7 @@ async fn generate_chat_answer(
     };
 
     let selected_segments = select_relevant_segments(message, prompt_history, &segments, 14);
-    let prompt = transcript_chat_prompt(
+    let prompt = prompt::build_transcript_chat_prompt(
         &conversation.video_title,
         summary.as_deref(),
         message,
@@ -794,78 +794,4 @@ fn tokenize(value: &str) -> HashSet<String> {
         .map(str::to_ascii_lowercase)
         .filter(|term| term.len() > 2)
         .collect()
-}
-
-fn transcript_chat_prompt(
-    video_title: &str,
-    summary: Option<&str>,
-    message: &str,
-    history: &[TranscriptChatMessage],
-    segments: &[TranscriptSegment],
-) -> String {
-    let mut prompt = String::from(
-        "You are NexaLearn's learning chat assistant.\n\
-        Use the provided video transcript excerpts when they are relevant, and cite those transcript-backed claims inline like [3:25].\n\
-        You may also answer general questions that go beyond the video using your broader knowledge.\n\
-        When an answer relies on outside knowledge rather than the transcript, say so briefly and avoid inventing video-specific details.\n\
-        If the learner asks about the video and the excerpts do not contain enough information, say what is missing and then offer any helpful general context.\n\
-        Be concise and helpful.\n\n",
-    );
-
-    prompt.push_str(&format!("Video title: {video_title}\n"));
-    if let Some(summary) = summary {
-        prompt.push_str("Video summary:\n");
-        prompt.push_str(&truncate_chars(summary, 1_500));
-        prompt.push_str("\n\n");
-    }
-
-    if !history.is_empty() {
-        prompt.push_str("Current chat history:\n");
-        for chat_message in history.iter().rev().take(8).rev() {
-            let role = if chat_message.role == "assistant" {
-                "assistant"
-            } else {
-                "user"
-            };
-            prompt.push_str(role);
-            prompt.push_str(": ");
-            prompt.push_str(&truncate_chars(&chat_message.content, 700));
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-
-    prompt.push_str("Transcript excerpts:\n");
-    for segment in segments {
-        prompt.push_str(&format!(
-            "[{}] {}\n",
-            format_timestamp(segment.start_s),
-            truncate_chars(&segment.text, 900)
-        ));
-    }
-
-    prompt.push_str("\nLearner question:\n");
-    prompt.push_str(message);
-    prompt.push_str("\n\nAnswer:");
-    prompt
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let mut output = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
-        output.push_str("...");
-    }
-    output
-}
-
-fn format_timestamp(value: f64) -> String {
-    let total_seconds = value.max(0.0).floor() as u64;
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
 }
