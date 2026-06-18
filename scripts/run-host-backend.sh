@@ -17,6 +17,12 @@ export BIND_ADDR="${BIND_ADDR:-127.0.0.1:8080}"
 
 mkdir -p "$TMP_DIR"
 
+echo "Building React frontend..."
+if [[ ! -d frontend/node_modules ]]; then
+  (cd frontend && npm ci)
+fi
+(cd frontend && npm run build)
+
 echo "Starting NexaLearn backend on http://$BIND_ADDR"
 echo "LLM: $GEMMA_BASE_URL ($GEMMA_MODEL)"
 echo "Postgres: $DATABASE_URL"

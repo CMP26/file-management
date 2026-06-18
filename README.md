@@ -79,6 +79,8 @@ In a third terminal:
 ./scripts/run-host-backend.sh
 ```
 
+This command installs frontend packages when needed, builds the React single-file bundle, and then starts the Rust backend.
+
 The script sets the local development environment:
 
 ```text
@@ -116,6 +118,26 @@ The selected-video panel also includes:
 During processing, the backend also creates a browser-friendly `playback.mp4` with H.264/AAC when ffmpeg can transcode the upload. Existing videos without that derivative are repaired on demand the first time the player requests media.
 
 Do not open `frontend/index.html` directly from the filesystem. The frontend should be served by the backend from `http://localhost:8080/`, otherwise browser fetches can fail.
+
+The frontend is a React application built with Vite. To rebuild the embedded single-file bundle after frontend changes:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+The source entry remains `frontend/index.html`; the backend embeds `frontend/dist/index.html`.
+
+The original pre-React frontend is preserved unchanged at `frontend/index.legacy.html` and is available from `http://localhost:8080/legacy`.
+
+For frontend development with hot reload, keep the backend running and use:
+
+```bash
+./scripts/run-frontend-dev.sh
+```
+
+Then open `http://127.0.0.1:4173`. Vite proxies API and SSE requests to the backend at `http://127.0.0.1:8080`.
 
 ### 5. Quick checks
 

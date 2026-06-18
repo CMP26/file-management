@@ -1,3 +1,12 @@
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/index.html frontend/vite.config.js ./
+COPY frontend/src ./src
+RUN npm run build
+
 FROM rust:1.91-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,6 +20,7 @@ WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 COPY frontend ./frontend
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 COPY migrations ./migrations
 COPY src ./src
 RUN cargo build --release --locked
