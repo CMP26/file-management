@@ -12,6 +12,8 @@ const STOP_WORDS: &[&str] = &[
     "you",
 ];
 
+type CacheCandidateRow = (Uuid, String, Option<String>, Vec<String>, f32);
+
 pub(super) struct CacheHit {
     pub id: Uuid,
     pub answer: String,
@@ -31,7 +33,7 @@ pub(super) async fn lookup(
     sqlx::query("SET LOCAL hnsw.iterative_scan = strict_order")
         .execute(&mut *transaction)
         .await?;
-    let rows: Vec<(Uuid, String, Option<String>, Vec<String>, f32)> = sqlx::query_as(
+    let rows: Vec<CacheCandidateRow> = sqlx::query_as(
         r#"
         WITH candidates AS (
             (

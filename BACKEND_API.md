@@ -136,6 +136,7 @@ Response:
       "description": "Introductory biology lectures",
       "created_at": "2026-06-13T09:30:00Z",
       "video_count": 3,
+      "document_count": 2,
       "question_count": 18
     }
   ]
@@ -164,6 +165,7 @@ Response:
   "description": "Introductory biology lectures",
   "created_at": "2026-06-13T09:30:00Z",
   "video_count": 0,
+  "document_count": 0,
   "question_count": 0
 }
 ```
@@ -189,6 +191,51 @@ Response:
 ## Videos
 
 Videos belong to a course through `videos.course_id`. Questions keep their source video through `questions.video_id`, so a course question can always be traced back to the video and transcript used for grading and justification.
+
+## Documents
+
+PDF documents belong to courses. Once processing finishes, their page-aware chunks are available to every lesson chat in the same course.
+
+### `POST /api/documents/upload`
+
+Uploads a text-based PDF and queues extraction, chunking, and embedding.
+
+```bash
+curl -X POST http://localhost:8080/api/documents/upload \
+  -F course_id=7e9ceae3-6ab9-45dc-8f3d-b64df2c103669 \
+  -F title="Java reference" \
+  -F file=@java-reference.pdf
+```
+
+Response:
+
+```json
+{
+  "document_id": "661ce988-9827-40e1-a5a6-e7f76bb17235",
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "status": "pending"
+}
+```
+
+### `GET /api/documents`
+
+Lists documents and processing status. Use `?course_id=<uuid>` to filter.
+
+### `GET /api/documents/{document_id}`
+
+Returns one document with `status`, `page_count`, `chunk_count`, and any processing error.
+
+### `GET /api/documents/{document_id}/events`
+
+Streams `event: document` snapshots until status becomes `ready` or `failed`.
+
+### `GET /api/documents/{document_id}/file`
+
+Returns the original PDF for inline viewing and page citations.
+
+### `DELETE /api/documents/{document_id}`
+
+Deletes the PDF, its chunks, and stale semantic answers associated with lessons in that course.
 
 ### `GET /api/videos`
 

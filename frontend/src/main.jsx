@@ -11,6 +11,7 @@ import {
   CircleHelp,
   Clock3,
   CloudDownload,
+  FileText,
   FileQuestion,
   Film,
   FolderOpen,
@@ -43,6 +44,7 @@ const STUDENTS = [
 ];
 const API_BASE = window.location.origin === "null" ? "http://localhost:8080" : window.location.origin;
 const TERMINAL_VIDEO_STATUSES = new Set(["ready", "failed"]);
+const TERMINAL_DOCUMENT_STATUSES = new Set(["ready", "failed"]);
 
 async function api(path, options = {}) {
   let response;
@@ -100,10 +102,12 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [courses, setCourses] = useState([]);
   const [videos, setVideos] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [health, setHealth] = useState("checking");
   const [llm, setLlm] = useState(null);
   const [selectedVideoId, setSelectedVideoId] = useState(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [courseOpen, setCourseOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -121,12 +125,14 @@ function App() {
 
   const loadCore = async (quiet = false) => {
     try {
-      const [courseData, videoData] = await Promise.all([
+      const [courseData, videoData, documentData] = await Promise.all([
         api("/api/courses"),
-        api("/api/videos")
+        api("/api/videos"),
+        api("/api/documents")
       ]);
       setCourses(courseData.courses || []);
       setVideos(videoData.videos || []);
+      setDocuments(documentData.documents || []);
       if (!quiet && !selectedVideoId && videoData.videos?.length) {
         setSelectedVideoId(videoData.videos[0].id);
       }
@@ -157,11 +163,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const active = videos.some((video) => !TERMINAL_VIDEO_STATUSES.has(video.status));
+    const active = videos.some((video) => !TERMINAL_VIDEO_STATUSES.has(video.status))
+      || documents.some((document) => !TERMINAL_DOCUMENT_STATUSES.has(document.status));
     if (!active) return undefined;
     const timer = window.setInterval(() => loadCore(true), 5000);
     return () => window.clearInterval(timer);
-  }, [videos]);
+  }, [videos, documents]);
 
   const navigate = (nextView) => {
     setView(nextView);
@@ -214,6 +221,7 @@ function App() {
     { id: "overview", label: "Overview", icon: Gauge },
     { id: "courses", label: "Courses", icon: GraduationCap },
     { id: "library", label: "Library", icon: Library },
+    { id: "documents", label: "Documents", icon: FileText },
     { id: "question-bank", label: "Question Bank", icon: FileQuestion },
     { id: "study", label: "Study Room", icon: Sparkles }
   ];
@@ -288,6 +296,9 @@ function App() {
             <button className="button primary" onClick={() => setUploadOpen(true)}>
               <Upload size={17} /><span>Add lesson</span>
             </button>
+            <button className="button secondary" onClick={() => setDocumentUploadOpen(true)}>
+              <FileText size={17} /><span>Add PDF</span>
+            </button>
           </div>
         </header>
 
@@ -326,6 +337,15 @@ function App() {
                   deleteLesson={deleteLesson}
                 />
               )}
+              {view === "documents" && (
+                <DocumentsView
+                  documents={documents}
+                  courses={courses}
+                  openUpload={() => setDocumentUploadOpen(true)}
+                  refresh={() => loadCore(true)}
+                  notify={notify}
+                />
+              )}
               {view === "question-bank" && (
                 <QuestionBankView courses={courses} videos={videos} notify={notify} />
               )}
@@ -355,6 +375,18 @@ function App() {
             setUploadOpen(false);
             loadCore(true);
             openStudyRoom(videoId);
+          }}
+          notify={notify}
+        />
+      )}
+      {documentUploadOpen && (
+        <DocumentUploadDialog
+          courses={courses}
+          close={() => setDocumentUploadOpen(false)}
+          complete={() => {
+            setDocumentUploadOpen(false);
+            loadCore(true);
+            navigate("documents");
           }}
           notify={notify}
         />
@@ -440,7 +472,7 @@ function Overview({ stats, courses, videos, openStudyRoom, navigate, openUpload 
                 <div className="course-letter">{course.title.slice(0, 1).toUpperCase()}</div>
                 <div>
                   <strong>{course.title}</strong>
-                  <span>{course.video_count} lessons</span>
+                  <span>{course.video_count} lessons · {course.document_count || 0} PDFs</span>
                 </div>
                 <b>{course.question_count}</b>
                 <small>questions</small>
@@ -492,7 +524,7 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
               <div className="course-letter small">{course.title.slice(0, 1).toUpperCase()}</div>
               <div>
                 <strong>{course.title}</strong>
-                <span>{course.video_count} lessons · {course.question_count} questions</span>
+                <span>{course.video_count} lessons · {course.document_count || 0} PDFs · {course.question_count} questions</span>
               </div>
               <ChevronRight size={16} />
             </button>
@@ -512,6 +544,7 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
                 <div className="detail-title-actions">
                   <div className="detail-metrics">
                     <span><strong>{selected.video_count}</strong> lessons</span>
+                    <span><strong>{selected.document_count || 0}</strong> PDFs</span>
                     <span><strong>{selected.question_count}</strong> questions</span>
                   </div>
                   <button className="icon-button danger" onClick={() => deleteCourse(selected)} title="Delete course">
@@ -601,6 +634,59 @@ function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, dele
             </article>
           ))}
           {!filtered.length && <EmptyState icon={FolderOpen} title="No matching lessons" body="Change the filters or upload new media." />}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DocumentsView({ documents, courses, openUpload, refresh, notify }) {
+  const [courseId, setCourseId] = useState("");
+  const filtered = documents.filter((document) => !courseId || document.course_id === courseId);
+
+  const remove = async (document) => {
+    if (!window.confirm(`Delete "${document.title}"?`)) return;
+    try {
+      await api(`/api/documents/${document.id}`, { method: "DELETE" });
+      notify("Document deleted.", "success");
+      refresh();
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  return (
+    <div className="page-stack">
+      <section className="page-heading compact">
+        <div><h1>Course documents</h1><p>PDF knowledge sources available to lesson chats.</p></div>
+        <button className="button primary" onClick={openUpload}><Upload size={17} /> Upload PDF</button>
+      </section>
+      <section className="surface">
+        <div className="filter-bar">
+          <select value={courseId} onChange={(event) => setCourseId(event.target.value)}>
+            <option value="">All courses</option>
+            {courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
+          </select>
+          <span>{filtered.length} documents</span>
+          <button className="icon-button" onClick={refresh} title="Refresh documents"><RefreshCw size={17} /></button>
+        </div>
+        <div className="document-list">
+          {filtered.map((document) => (
+            <article className="document-row" key={document.id}>
+              <div className="document-icon"><FileText size={18} /></div>
+              <div className="document-copy">
+                <strong>{document.title}</strong>
+                <span>{document.course_title} · {document.page_count ? `${document.page_count} pages` : "Processing pages"} · {document.chunk_count} chunks</span>
+                {document.error_msg && <small>{document.error_msg}</small>}
+              </div>
+              <StatusPill status={document.status} />
+              <a className="icon-button document-open" href={`${API_BASE}/api/documents/${document.id}/file`} target="_blank" rel="noreferrer" title="Open PDF">
+                <BookOpen size={16} />
+              </a>
+              <button className="icon-button danger" onClick={() => remove(document)} title="Delete document"><Trash2 size={16} /></button>
+            </article>
+          ))}
+          {!filtered.length && <EmptyState icon={FileText} title="No course documents" body="Upload a PDF to make it available to the chatbot." />}
         </div>
       </section>
     </div>
@@ -1009,10 +1095,21 @@ function ChatTab({ videoId, playerRef, notify, userId, studentName }) {
                     <p>{item.content}</p>
                     {!!item.sources?.length && (
                       <div className="message-sources">
-                        {item.sources.slice(0, 4).map((source) => (
-                          <button key={source.seq_index} onClick={() => seek(source.start_s)}>
-                            <Clock3 size={13} /> {formatDuration(source.start_s)}
-                          </button>
+                        {item.sources.slice(0, 6).map((source, index) => (
+                          source.source_type === "document" ? (
+                            <a
+                              key={`${source.document_id}:${source.seq_index}:${index}`}
+                              href={`${API_BASE}/api/documents/${source.document_id}/file#page=${source.page_start || 1}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <FileText size={13} /> {source.document_title} · p. {source.page_start}
+                            </a>
+                          ) : (
+                            <button key={`transcript:${source.seq_index}:${index}`} onClick={() => seek(source.start_s)}>
+                              <Clock3 size={13} /> {formatDuration(source.start_s)}
+                            </button>
+                          )
                         ))}
                       </div>
                     )}
@@ -1251,6 +1348,57 @@ function UploadDialog({ courses, close, complete, notify }) {
           <button className="button primary" type="submit" disabled={busy || !courseId}>
             {busy ? <LoaderCircle className="spin" size={17} /> : mode === "file" ? <Upload size={17} /> : <CloudDownload size={17} />}
             {busy ? "Queuing" : "Add lesson"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function DocumentUploadDialog({ courses, close, complete, notify }) {
+  const [courseId, setCourseId] = useState(courses[0]?.id || "");
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!courseId || !file) return;
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("course_id", courseId);
+      form.append("title", title.trim() || file.name.replace(/\.pdf$/i, ""));
+      form.append("file", file);
+      await api("/api/documents/upload", { method: "POST", body: form });
+      notify("PDF queued for extraction and indexing.", "success");
+      complete();
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Upload course PDF" close={close}>
+      <form className="form-stack" onSubmit={submit}>
+        <label><span>Course</span><select value={courseId} onChange={(event) => setCourseId(event.target.value)} required>
+          <option value="">Select course</option>
+          {courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
+        </select></label>
+        <label><span>Document title</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Optional display title" /></label>
+        <label className="file-drop">
+          <input type="file" accept="application/pdf,.pdf" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+          <FileText size={24} />
+          <strong>{file ? file.name : "Choose PDF document"}</strong>
+          <span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : "Text-based PDF, up to 100 MiB"}</span>
+        </label>
+        <div className="modal-actions">
+          <button className="button secondary" type="button" onClick={close}>Cancel</button>
+          <button className="button primary" type="submit" disabled={busy || !courseId || !file}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}
+            {busy ? "Uploading" : "Upload PDF"}
           </button>
         </div>
       </form>

@@ -32,6 +32,16 @@ struct TranscriptSegment {
     text: String,
 }
 
+#[derive(Debug, Clone)]
+struct DocumentContext {
+    document_id: Uuid,
+    document_title: String,
+    seq_index: i32,
+    page_start: i32,
+    page_end: i32,
+    text: String,
+}
+
 #[derive(Debug)]
 struct ChatMessageRow {
     id: Uuid,
@@ -47,6 +57,7 @@ struct ChatMessageRow {
 struct ConversationContext {
     user_id: Uuid,
     video_id: Uuid,
+    course_id: Uuid,
     name: String,
     is_waiting: bool,
     video_title: String,
@@ -137,13 +148,19 @@ pub async fn send_chat_message(
     }
 
     let conversation = conversation_context(&state, payload.user_id, conversation_id).await?;
-    if conversation.is_waiting {
+    if conversation.is_waiting || !claim_conversation_waiting(&state, conversation_id).await? {
         return Err(AppError::conflict(
             "chat is already waiting for an LLM response",
         ));
     }
 
-    let stored_history = load_chat_messages(&state, conversation_id).await?;
+    let stored_history = match load_chat_messages(&state, conversation_id).await {
+        Ok(history) => history,
+        Err(error) => {
+            release_conversation_waiting(&state, conversation_id).await;
+            return Err(error);
+        }
+    };
     let prompt_history = if stored_history.is_empty() {
         payload.history.clone()
     } else {
@@ -157,13 +174,20 @@ pub async fn send_chat_message(
     };
 
     let user_message_id =
-        insert_chat_message(&state, conversation_id, "user", message, &[], false, None).await?;
+        match insert_chat_message(&state, conversation_id, "user", message, &[], false, None).await
+        {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                release_conversation_waiting(&state, conversation_id).await;
+                return Err(error);
+            }
+        };
 
     let question_embedding = match semantic_cache::lookup(&state, conversation.video_id, message)
         .await
     {
         Ok((_embedding, Some(hit))) => {
-            let assistant_message_id = insert_chat_message(
+            let assistant_message_id = match insert_chat_message(
                 &state,
                 conversation_id,
                 "assistant",
@@ -172,10 +196,18 @@ pub async fn send_chat_message(
                 true,
                 Some(hit.similarity),
             )
-            .await?;
+            .await
+            {
+                Ok(message_id) => message_id,
+                Err(error) => {
+                    release_conversation_waiting(&state, conversation_id).await;
+                    return Err(error);
+                }
+            };
             if let Err(error) = semantic_cache::record_hit(&state, hit.id).await {
                 tracing::warn!(cache_id = %hit.id, error = %error, "failed to record semantic cache hit");
             }
+            set_conversation_waiting(&state, conversation_id, false).await?;
             let _ = state.chat_events.send(conversation_id);
             tracing::info!(
                 conversation_id = %conversation_id,
@@ -202,8 +234,6 @@ pub async fn send_chat_message(
             None
         }
     };
-
-    set_conversation_waiting(&state, conversation_id, true).await?;
 
     let worker_state = state.clone();
     let worker_conversation = conversation.clone();
@@ -337,12 +367,28 @@ async fn generate_chat_answer(
     };
 
     let selected_segments = select_relevant_segments(message, prompt_history, &segments, 14);
+    let selected_documents = match retrieve_document_context(
+        state,
+        conversation.course_id,
+        message,
+        prompt_history,
+        8,
+    )
+    .await
+    {
+        Ok(documents) => documents,
+        Err(error) => {
+            tracing::warn!(error = %error, "document retrieval unavailable; continuing with transcript context");
+            Vec::new()
+        }
+    };
     let prompt = prompt::build_transcript_chat_prompt(
         &conversation.video_title,
         summary.as_deref(),
         message,
         prompt_history,
         &selected_segments,
+        &selected_documents,
     );
     let answer = state
         .gemma
@@ -354,11 +400,31 @@ async fn generate_chat_answer(
     let sources = selected_segments
         .into_iter()
         .map(|segment| TranscriptChatSource {
+            source_type: "transcript".to_string(),
             seq_index: segment.seq_index,
             start_s: segment.start_s,
             end_s: segment.end_s,
             text: segment.text,
+            document_id: None,
+            document_title: None,
+            page_start: None,
+            page_end: None,
         })
+        .chain(
+            selected_documents
+                .into_iter()
+                .map(|document| TranscriptChatSource {
+                    source_type: "document".to_string(),
+                    seq_index: document.seq_index,
+                    start_s: 0.0,
+                    end_s: 0.0,
+                    text: document.text,
+                    document_id: Some(document.document_id),
+                    document_title: Some(document.document_title),
+                    page_start: Some(document.page_start),
+                    page_end: Some(document.page_end),
+                }),
+        )
         .collect();
 
     Ok((answer, sources))
@@ -566,9 +632,9 @@ async fn conversation_context(
     user_id: Uuid,
     conversation_id: Uuid,
 ) -> AppResult<ConversationContext> {
-    sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, bool, String)>(
+    sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, String, bool, String)>(
         r#"
-        SELECT c.id, c.user_id, c.video_id, c.name, c.is_waiting, v.title
+        SELECT c.id, c.user_id, c.video_id, v.course_id, c.name, c.is_waiting, v.title
         FROM chat_conversations c
         JOIN videos v ON v.id = c.video_id
         WHERE c.id = $1 AND c.user_id = $2
@@ -579,9 +645,10 @@ async fn conversation_context(
     .fetch_optional(&state.pool)
     .await?
     .map(
-        |(_, user_id, video_id, name, is_waiting, video_title)| ConversationContext {
+        |(_, user_id, video_id, course_id, name, is_waiting, video_title)| ConversationContext {
             user_id,
             video_id,
+            course_id,
             name,
             is_waiting,
             video_title,
@@ -696,6 +763,31 @@ async fn set_conversation_waiting(
     let _ = state.chat_events.send(conversation_id);
     tracing::info!(conversation_id = %conversation_id, is_waiting, "chat waiting state updated");
     Ok(())
+}
+
+async fn claim_conversation_waiting(state: &AppState, conversation_id: Uuid) -> AppResult<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE chat_conversations
+        SET is_waiting = true, updated_at = now()
+        WHERE id = $1 AND is_waiting = false
+        "#,
+    )
+    .bind(conversation_id)
+    .execute(&state.pool)
+    .await?;
+    if result.rows_affected() == 1 {
+        let _ = state.chat_events.send(conversation_id);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+async fn release_conversation_waiting(state: &AppState, conversation_id: Uuid) {
+    if let Err(error) = set_conversation_waiting(state, conversation_id, false).await {
+        tracing::error!(conversation_id = %conversation_id, error = %error, "failed to release chat waiting state");
+    }
 }
 
 async fn clear_stale_waiting_chats(state: &AppState) -> AppResult<()> {
@@ -899,4 +991,64 @@ fn tokenize(value: &str) -> HashSet<String> {
         .map(str::to_ascii_lowercase)
         .filter(|term| term.len() > 2)
         .collect()
+}
+
+async fn retrieve_document_context(
+    state: &AppState,
+    course_id: Uuid,
+    message: &str,
+    history: &[TranscriptChatMessage],
+    limit: i64,
+) -> AppResult<Vec<DocumentContext>> {
+    let mut query = message.to_string();
+    for item in history.iter().rev().take(4) {
+        query.push(' ');
+        query.push_str(&item.content);
+    }
+    let embedding = state.embeddings.embed_query(&query).await?;
+    let vector = embedding_vector_literal(&embedding)?;
+    let rows = sqlx::query_as::<_, (Uuid, String, i32, i32, i32, String, f32)>(
+        r#"
+        SELECT d.id, d.title, dc.seq_index, dc.page_start, dc.page_end, dc.content,
+               (1 - (dc.embedding <=> $2::vector))::REAL AS similarity
+        FROM document_chunks dc
+        JOIN documents d ON d.id = dc.document_id
+        WHERE d.course_id = $1 AND d.status = 'ready' AND dc.embedding_model = $3
+        ORDER BY dc.embedding <=> $2::vector
+        LIMIT $4
+        "#,
+    )
+    .bind(course_id)
+    .bind(vector)
+    .bind(state.embeddings.model())
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.6 >= 0.35)
+        .map(|row| DocumentContext {
+            document_id: row.0,
+            document_title: row.1,
+            seq_index: row.2,
+            page_start: row.3,
+            page_end: row.4,
+            text: row.5,
+        })
+        .collect())
+}
+
+fn embedding_vector_literal(embedding: &[f32]) -> AppResult<String> {
+    if embedding.len() != 768 || embedding.iter().any(|value| !value.is_finite()) {
+        return Err(AppError::external("invalid document query embedding"));
+    }
+    Ok(format!(
+        "[{}]",
+        embedding
+            .iter()
+            .map(f32::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
 }

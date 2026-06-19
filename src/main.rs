@@ -4,8 +4,8 @@ use axum::{
     Router,
 };
 use nexalearn_backend::{
-    assessment, chat, config::Config, courses, db, embedding, frontend, ingestion, llm, storage,
-    videos, whisper, AppState,
+    assessment, chat, config::Config, courses, db, documents, embedding, frontend, ingestion, llm,
+    storage, videos, whisper, AppState,
 };
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -19,6 +19,12 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::courses::list_courses,
         nexalearn_backend::courses::create_course,
         nexalearn_backend::courses::delete_course,
+        nexalearn_backend::documents::upload_document,
+        nexalearn_backend::documents::list_documents,
+        nexalearn_backend::documents::get_document,
+        nexalearn_backend::documents::delete_document,
+        nexalearn_backend::documents::stream_document_events,
+        nexalearn_backend::documents::get_document_file,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
         nexalearn_backend::videos::stream_video_events,
@@ -54,6 +60,10 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::CourseListResponse,
             nexalearn_backend::models::CreateCourseRequest,
             nexalearn_backend::models::DeleteCourseResponse,
+            nexalearn_backend::models::DocumentResponse,
+            nexalearn_backend::models::DocumentListResponse,
+            nexalearn_backend::models::DocumentUploadResponse,
+            nexalearn_backend::models::DeleteDocumentResponse,
             nexalearn_backend::models::SourceVideoResponse,
             nexalearn_backend::models::VideoOverview,
             nexalearn_backend::models::VideoListResponse,
@@ -95,6 +105,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Health", description = "Service health check"),
         (name = "LLM", description = "LLM connectivity checks"),
         (name = "Courses", description = "Course catalog for grouping source videos"),
+        (name = "Documents", description = "Course PDF upload, processing, and retrieval"),
         (name = "Videos", description = "Video catalog and processing status"),
         (name = "Ingestion", description = "Video upload and processing"),
         (name = "Mux", description = "Mux URL import integration"),
@@ -140,6 +151,20 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/courses/:course_id",
             axum::routing::delete(courses::delete_course),
+        )
+        .route("/api/documents", get(documents::list_documents))
+        .route("/api/documents/upload", post(documents::upload_document))
+        .route(
+            "/api/documents/:document_id",
+            get(documents::get_document).delete(documents::delete_document),
+        )
+        .route(
+            "/api/documents/:document_id/events",
+            get(documents::stream_document_events),
+        )
+        .route(
+            "/api/documents/:document_id/file",
+            get(documents::get_document_file),
         )
         .route("/api/videos", get(videos::list_videos))
         .route(

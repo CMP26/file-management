@@ -30,6 +30,7 @@ Install these on the host machine:
 - Docker with Docker Compose
 - Rust/Cargo
 - `ffmpeg`
+- Poppler (`pdftotext`)
 - `llama-server`
 - Ollama
 - Your Gemma GGUF model
@@ -113,6 +114,8 @@ BIND_ADDR=127.0.0.1:8080
 `GEMMA_MAX_CONCURRENT_REQUESTS` defaults to `2` so Gemma can keep one request active while another queued generation is allowed through. Failed or overloaded generations are retried automatically; adjust this value only if your LLM server needs stricter or looser concurrency.
 
 Chat questions are embedded with Ollama and compared against cached questions for the same video using pgvector cosine similarity. Short-question retrieval combines cosine similarity with normalized subject-keyword overlap so obvious paraphrases are retained while subject mismatches are rejected. Vector-only matches require a strict `0.92` score. The database performs indexed vector and lexical candidate lookups; embeddings are not fetched into the backend for a full scan. A combined score at or above `SEMANTIC_CACHE_THRESHOLD` returns the cached answer without calling Gemma. If Ollama is unavailable, the chat pipeline falls back to Gemma.
+
+Course PDFs are uploaded from the Documents workspace. The backend stores the original PDF in RustFS, extracts text page-by-page with `pdftotext`, creates overlapping chunks, embeds them with `nomic-embed-text`, and indexes them with pgvector. Lesson chats retrieve relevant chunks from every ready PDF in the lesson's course and return document/page citations alongside transcript timestamps. Scanned image-only PDFs require OCR before upload.
 
 The backend runs migrations automatically on startup.
 

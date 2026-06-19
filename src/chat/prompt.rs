@@ -1,4 +1,4 @@
-use super::TranscriptSegment;
+use super::{DocumentContext, TranscriptSegment};
 use crate::models::TranscriptChatMessage;
 
 const CHAT_WINDOW_TURNS: usize = 8;
@@ -9,10 +9,12 @@ pub(super) fn build_transcript_chat_prompt(
     message: &str,
     history: &[TranscriptChatMessage],
     segments: &[TranscriptSegment],
+    documents: &[DocumentContext],
 ) -> String {
     let mut prompt = String::from(
         "You are NexaLearn's learning chat assistant.\n\
-        Use the provided video transcript excerpts when they are relevant, and cite those transcript-backed claims inline like [3:25].\n\
+        Use the provided video transcript excerpts and course document excerpts when relevant.\n\
+        Cite transcript-backed claims inline like [3:25]. Cite document-backed claims like [Document title, p. 4].\n\
         You may also answer general questions that go beyond the video using your broader knowledge.\n\
         When an answer relies on outside knowledge rather than the transcript, say so briefly and avoid inventing video-specific details.\n\
         If the learner asks about the video and the excerpts do not contain enough information, say what is missing and then offer any helpful general context.\n\
@@ -33,6 +35,25 @@ pub(super) fn build_transcript_chat_prompt(
                 "[{}] {}\n",
                 format_timestamp(segment.start_s),
                 truncate_chars(&segment.text, 900)
+            ));
+        }
+    }
+
+    prompt.push_str("\nCourse document excerpts:\n");
+    if documents.is_empty() {
+        prompt.push_str("[No relevant course document excerpts are available.]\n");
+    } else {
+        for document in documents {
+            let pages = if document.page_start == document.page_end {
+                format!("p. {}", document.page_start)
+            } else {
+                format!("pp. {}-{}", document.page_start, document.page_end)
+            };
+            prompt.push_str(&format!(
+                "[{}, {}] {}\n",
+                document.document_title,
+                pages,
+                truncate_chars(&document.text, 1200)
             ));
         }
     }
@@ -102,7 +123,8 @@ mod tests {
             text: "transcript-context".to_string(),
         }];
 
-        let prompt = build_transcript_chat_prompt("Lesson", None, "question", &history, &segments);
+        let prompt =
+            build_transcript_chat_prompt("Lesson", None, "question", &history, &segments, &[]);
         let prompt_lines = prompt.lines().collect::<Vec<_>>();
 
         for index in 0..4 {
@@ -121,9 +143,26 @@ mod tests {
 
     #[test]
     fn keeps_transcript_section_when_no_segments_exist() {
-        let prompt = build_transcript_chat_prompt("Lesson", None, "question", &[], &[]);
+        let prompt = build_transcript_chat_prompt("Lesson", None, "question", &[], &[], &[]);
 
         assert!(prompt.contains("Transcript excerpts:"));
+        assert!(prompt.contains("No transcript excerpts are available"));
+    }
+
+    #[test]
+    fn includes_document_context_with_page_citation() {
+        let documents = vec![DocumentContext {
+            document_id: uuid::Uuid::new_v4(),
+            document_title: "Java Reference".to_string(),
+            seq_index: 0,
+            page_start: 4,
+            page_end: 4,
+            text: "The JVM executes Java bytecode.".to_string(),
+        }];
+
+        let prompt = build_transcript_chat_prompt("Lesson", None, "question", &[], &[], &documents);
+
+        assert!(prompt.contains("[Java Reference, p. 4] The JVM executes Java bytecode."));
         assert!(prompt.contains("No transcript excerpts are available"));
     }
 }

@@ -15,6 +15,7 @@ pub struct AppState {
     pub whisper: WhisperClient,
     pub chat_events: broadcast::Sender<Uuid>,
     pub video_events: broadcast::Sender<Uuid>,
+    pub document_events: broadcast::Sender<Uuid>,
     pub exam_events: broadcast::Sender<Uuid>,
     pub justification_events: broadcast::Sender<Uuid>,
 }
@@ -30,6 +31,7 @@ impl AppState {
     ) -> Self {
         let (chat_events, _) = broadcast::channel(256);
         let (video_events, _) = broadcast::channel(256);
+        let (document_events, _) = broadcast::channel(256);
         let (exam_events, _) = broadcast::channel(256);
         let (justification_events, _) = broadcast::channel(256);
         Self {
@@ -41,6 +43,7 @@ impl AppState {
             whisper,
             chat_events,
             video_events,
+            document_events,
             exam_events,
             justification_events,
         }

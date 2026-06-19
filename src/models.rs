@@ -140,6 +140,7 @@ pub struct CourseResponse {
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub video_count: i64,
+    pub document_count: i64,
     pub question_count: i64,
 }
 
@@ -157,6 +158,40 @@ pub struct CreateCourseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DeleteCourseResponse {
     pub course_id: Uuid,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DocumentResponse {
+    pub id: Uuid,
+    pub course_id: Uuid,
+    pub course_title: String,
+    pub title: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub status: String,
+    pub error_msg: Option<String>,
+    pub page_count: Option<i32>,
+    pub chunk_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DocumentListResponse {
+    pub documents: Vec<DocumentResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DocumentUploadResponse {
+    pub document_id: Uuid,
+    pub course_id: Uuid,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DeleteDocumentResponse {
+    pub document_id: Uuid,
     pub deleted: bool,
 }
 
@@ -379,10 +414,39 @@ pub struct TranscriptChatRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TranscriptChatSource {
+    #[serde(default = "default_chat_source_type")]
+    pub source_type: String,
     pub seq_index: i32,
     pub start_s: f64,
     pub end_s: f64,
     pub text: String,
+    #[serde(default)]
+    pub document_id: Option<Uuid>,
+    #[serde(default)]
+    pub document_title: Option<String>,
+    #[serde(default)]
+    pub page_start: Option<i32>,
+    #[serde(default)]
+    pub page_end: Option<i32>,
+}
+
+fn default_chat_source_type() -> String {
+    "transcript".to_string()
+}
+
+#[cfg(test)]
+mod chat_source_tests {
+    use super::TranscriptChatSource;
+
+    #[test]
+    fn deserializes_sources_saved_before_document_rag() {
+        let source: TranscriptChatSource =
+            serde_json::from_str(r#"{"seq_index":1,"start_s":2.0,"end_s":3.0,"text":"legacy"}"#)
+                .expect("legacy transcript source");
+
+        assert_eq!(source.source_type, "transcript");
+        assert!(source.document_id.is_none());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -34,6 +34,18 @@ impl OllamaEmbeddingClient {
     }
 
     pub async fn embed(&self, input: &str) -> AppResult<Vec<f32>> {
+        self.embed_text(input).await
+    }
+
+    pub async fn embed_query(&self, input: &str) -> AppResult<Vec<f32>> {
+        self.embed_text(&format!("search_query: {input}")).await
+    }
+
+    pub async fn embed_document(&self, input: &str) -> AppResult<Vec<f32>> {
+        self.embed_text(&format!("search_document: {input}")).await
+    }
+
+    async fn embed_text(&self, input: &str) -> AppResult<Vec<f32>> {
         let response = self
             .client
             .post(format!("{}/api/embed", self.base_url))
