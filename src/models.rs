@@ -376,12 +376,42 @@ pub struct AttemptStatusResponse {
     pub attempt_id: Uuid,
     pub user_id: Uuid,
     pub video_id: Uuid,
+    pub started_at: DateTime<Utc>,
     pub submitted_at: Option<DateTime<Utc>>,
     pub status: String,
     pub is_waiting: bool,
     pub total_score: i32,
     pub pending_count: i64,
     pub answers: Vec<AttemptAnswerStatusItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UserExamAttemptResponse {
+    pub attempt_id: Uuid,
+    pub user_id: Uuid,
+    pub video_id: Uuid,
+    pub video_title: String,
+    pub course_id: Uuid,
+    pub course_title: String,
+    pub started_at: DateTime<Utc>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub is_waiting: bool,
+    pub total_score: i32,
+    pub pending_count: i64,
+    pub answer_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UserExamAttemptListResponse {
+    pub user_id: Uuid,
+    pub attempts: Vec<UserExamAttemptResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DeleteExamAttemptResponse {
+    pub attempt_id: Uuid,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

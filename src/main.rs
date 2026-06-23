@@ -1,6 +1,6 @@
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use nexalearn_backend::{
@@ -37,6 +37,8 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::assessment::handler::get_video_questions,
         nexalearn_backend::assessment::handler::get_course_random_questions,
         nexalearn_backend::assessment::handler::start_exam_attempt,
+        nexalearn_backend::assessment::handler::list_user_exam_attempts,
+        nexalearn_backend::assessment::handler::delete_user_exam_attempt,
         nexalearn_backend::assessment::handler::get_attempt_status,
         nexalearn_backend::assessment::handler::stream_attempt_events,
         nexalearn_backend::assessment::handler::submit_attempt,
@@ -87,6 +89,9 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::SubmitAttemptResponse,
             nexalearn_backend::models::AttemptAnswerStatusItem,
             nexalearn_backend::models::AttemptStatusResponse,
+            nexalearn_backend::models::UserExamAttemptResponse,
+            nexalearn_backend::models::UserExamAttemptListResponse,
+            nexalearn_backend::models::DeleteExamAttemptResponse,
             nexalearn_backend::models::JustificationStatusResponse,
             nexalearn_backend::models::JustificationResponse,
             nexalearn_backend::models::TranscriptChatMessage,
@@ -218,6 +223,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/videos/:video_id/exams/start",
             post(assessment::handler::start_exam_attempt),
+        )
+        .route(
+            "/api/users/:user_id/exams",
+            get(assessment::handler::list_user_exam_attempts),
+        )
+        .route(
+            "/api/users/:user_id/exams/:attempt_id",
+            delete(assessment::handler::delete_user_exam_attempt),
         )
         .route(
             "/api/exams/:attempt_id",

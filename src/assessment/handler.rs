@@ -2,10 +2,11 @@ use crate::{
     assessment::{grader::grade_answer, justifier::response_for_answer},
     models::{
         AttemptAnswerRecord, AttemptAnswerStatusItem, AttemptStatusResponse, ChoiceRecord,
-        CourseRandomQuestionResponse, CourseRandomQuestionsResponse, ExamAttemptRecord,
-        GradeResponse, JustificationResponse, JustificationStatusResponse, QuestionChoiceResponse,
-        QuestionRecord, QuestionsByVideoResponse, SourceVideoResponse, StartExamRequest,
-        StartExamResponse, SubmitAttemptRequest, SubmitAttemptResponse, TopicQuestionGroupResponse,
+        CourseRandomQuestionResponse, CourseRandomQuestionsResponse, DeleteExamAttemptResponse,
+        ExamAttemptRecord, GradeResponse, JustificationResponse, JustificationStatusResponse,
+        QuestionChoiceResponse, QuestionRecord, QuestionsByVideoResponse, SourceVideoResponse,
+        StartExamRequest, StartExamResponse, SubmitAttemptRequest, SubmitAttemptResponse,
+        TopicQuestionGroupResponse, UserExamAttemptListResponse, UserExamAttemptResponse,
     },
     AppError, AppResult, AppState,
 };
@@ -33,6 +34,11 @@ pub struct RandomQuestionFilters {
     pub r#type: Option<String>,
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct UserExamFilters {
+    pub video_id: Option<Uuid>,
+}
+
 #[derive(Debug, FromRow)]
 struct CourseRandomQuestionRow {
     id: Uuid,
@@ -43,6 +49,21 @@ struct CourseRandomQuestionRow {
     difficulty: Option<String>,
     source_video_title: String,
     topic_label: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct UserExamAttemptRow {
+    attempt_id: Uuid,
+    user_id: Uuid,
+    video_id: Uuid,
+    video_title: String,
+    course_id: Uuid,
+    course_title: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    submitted_at: Option<chrono::DateTime<chrono::Utc>>,
+    total_score: i32,
+    pending_count: i64,
+    answer_count: i64,
 }
 
 #[utoipa::path(
@@ -266,6 +287,122 @@ pub async fn start_exam_attempt(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/users/{user_id}/exams",
+    tag = "Assessment",
+    params(
+        ("user_id" = Uuid, Path, description = "User id"),
+        ("video_id" = Option<Uuid>, Query, description = "Optionally filter attempts by lesson/video id")
+    ),
+    responses(
+        (status = 200, description = "Assessment attempts for a user", body = UserExamAttemptListResponse),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn list_user_exam_attempts(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Query(filters): Query<UserExamFilters>,
+) -> AppResult<Json<UserExamAttemptListResponse>> {
+    let rows: Vec<UserExamAttemptRow> = sqlx::query_as(
+        r#"
+        SELECT
+            ea.id AS attempt_id,
+            ea.user_id,
+            ea.video_id,
+            v.title AS video_title,
+            c.id AS course_id,
+            c.title AS course_title,
+            ea.started_at,
+            ea.submitted_at,
+            COALESCE(SUM(aa.score), 0)::INTEGER AS total_score,
+            COUNT(aa.id) FILTER (WHERE aa.graded_at IS NULL)::BIGINT AS pending_count,
+            COUNT(aa.id)::BIGINT AS answer_count
+        FROM exam_attempts ea
+        JOIN videos v ON v.id = ea.video_id
+        JOIN courses c ON c.id = v.course_id
+        LEFT JOIN attempt_answers aa ON aa.attempt_id = ea.id
+        WHERE ea.user_id = $1
+          AND ($2::UUID IS NULL OR ea.video_id = $2)
+        GROUP BY ea.id, ea.user_id, ea.video_id, v.title, c.id, c.title, ea.started_at, ea.submitted_at
+        ORDER BY ea.started_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .bind(filters.video_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let attempts = rows
+        .into_iter()
+        .map(|row| {
+            let status = if row.submitted_at.is_none() {
+                "started"
+            } else if row.pending_count > 0 {
+                "grading"
+            } else {
+                "graded"
+            };
+            UserExamAttemptResponse {
+                attempt_id: row.attempt_id,
+                user_id: row.user_id,
+                video_id: row.video_id,
+                video_title: row.video_title,
+                course_id: row.course_id,
+                course_title: row.course_title,
+                started_at: row.started_at,
+                submitted_at: row.submitted_at,
+                status: status.to_string(),
+                is_waiting: row.submitted_at.is_some() && row.pending_count > 0,
+                total_score: row.total_score,
+                pending_count: row.pending_count,
+                answer_count: row.answer_count,
+            }
+        })
+        .collect();
+
+    Ok(Json(UserExamAttemptListResponse { user_id, attempts }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/users/{user_id}/exams/{attempt_id}",
+    tag = "Assessment",
+    params(
+        ("user_id" = Uuid, Path, description = "User id"),
+        ("attempt_id" = Uuid, Path, description = "Exam attempt id")
+    ),
+    responses(
+        (status = 200, description = "Deleted exam attempt", body = DeleteExamAttemptResponse),
+        (status = 404, description = "Attempt not found for this user"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn delete_user_exam_attempt(
+    State(state): State<AppState>,
+    Path((user_id, attempt_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<DeleteExamAttemptResponse>> {
+    let result = sqlx::query("DELETE FROM exam_attempts WHERE id = $1 AND user_id = $2")
+        .bind(attempt_id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found(format!(
+            "attempt {attempt_id} was not found for user {user_id}"
+        )));
+    }
+
+    let _ = state.exam_events.send(attempt_id);
+
+    Ok(Json(DeleteExamAttemptResponse {
+        attempt_id,
+        deleted: true,
+    }))
+}
+
+#[utoipa::path(
     post,
     path = "/api/exams/{attempt_id}/submit",
     tag = "Assessment",
@@ -275,7 +412,7 @@ pub async fn start_exam_attempt(
     request_body = SubmitAttemptRequest,
     responses(
         (status = 200, description = "Attempt submitted and graded", body = SubmitAttemptResponse),
-        (status = 400, description = "Question does not belong to the attempt video"),
+        (status = 400, description = "Question does not belong to the attempt course"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -298,17 +435,28 @@ pub async fn submit_attempt(
         return Err(AppError::conflict("attempt has already been submitted"));
     }
 
+    let attempt_course_id: Uuid = sqlx::query_scalar("SELECT course_id FROM videos WHERE id = $1")
+        .bind(attempt.video_id)
+        .fetch_one(&state.pool)
+        .await?;
+
     let mut submitted_count = 0i64;
     for answer_input in payload.answers {
-        let question_video_id: Uuid =
-            sqlx::query_scalar("SELECT video_id FROM questions WHERE id = $1")
-                .bind(answer_input.question_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if question_video_id != attempt.video_id {
+        let (question_video_id, question_course_id): (Uuid, Uuid) = sqlx::query_as(
+            r#"
+            SELECT q.video_id, v.course_id
+            FROM questions q
+            JOIN videos v ON v.id = q.video_id
+            WHERE q.id = $1
+            "#,
+        )
+        .bind(answer_input.question_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if question_course_id != attempt_course_id {
             return Err(AppError::bad_request(format!(
-                "question {} does not belong to video {}",
-                answer_input.question_id, attempt.video_id
+                "question {} from video {} does not belong to attempt course {}",
+                answer_input.question_id, question_video_id, attempt_course_id
             )));
         }
 
@@ -684,9 +832,10 @@ async fn attempt_status_response(
         attempt_id,
         user_id: attempt.user_id,
         video_id: attempt.video_id,
+        started_at: attempt.started_at,
         submitted_at: attempt.submitted_at,
         status: status.to_string(),
-        is_waiting: pending_count > 0,
+        is_waiting: attempt.submitted_at.is_some() && pending_count > 0,
         total_score,
         pending_count,
         answers: answers

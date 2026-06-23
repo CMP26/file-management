@@ -1107,6 +1107,11 @@ textarea::placeholder {
   font-size: 10px;
 }
 
+.bank-summary-actions {
+  align-content: center;
+  min-width: 170px !important;
+}
+
 .question-bank-list {
   display: grid;
   gap: 10px;
@@ -1119,6 +1124,14 @@ textarea::placeholder {
   border-radius: 8px;
   background: var(--surface);
   overflow: hidden;
+}
+
+.bank-question.correct {
+  box-shadow: inset 3px 0 0 #36a071;
+}
+
+.bank-question.incorrect {
+  box-shadow: inset 3px 0 0 #ce5b56;
 }
 
 .question-index {
@@ -1817,6 +1830,71 @@ textarea::placeholder {
 .score-badge span {
   color: var(--muted);
   font-size: 9px;
+}
+
+.assessment-history .detail-pane {
+  padding: 0;
+}
+
+.assessment-history .detail-title {
+  padding: 24px 28px;
+}
+
+.assessment-attempt > span:last-child {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.assessment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.assessment-summary > div {
+  display: grid;
+  gap: 2px;
+  border-right: 1px solid var(--line);
+  padding: 14px 18px;
+}
+
+.assessment-summary > div:last-child {
+  border-right: 0;
+}
+
+.assessment-summary strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.assessment-summary span,
+.submitted-answer > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.exam-list.read-only {
+  background: var(--surface);
+}
+
+.submitted-answer {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 10px 12px;
+}
+
+.submitted-answer p {
+  color: #344039;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .exam-list {

@@ -823,9 +823,65 @@ Response:
 }
 ```
 
+### `GET /api/users/{user_id}/exams`
+
+Lists previous assessment attempts for a user, newest first. Use `video_id` to filter the list to one lesson.
+
+Optional query parameters:
+
+| Name | Type | Notes |
+|---|---|---|
+| `video_id` | UUID | Return only attempts for one lesson/video |
+
+```bash
+curl "http://localhost:8080/api/users/2a58cc88-5cb6-432d-bcaf-4ff12c010e3b/exams"
+```
+
+Response:
+
+```json
+{
+  "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+  "attempts": [
+    {
+      "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
+      "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+      "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+      "video_title": "Demo lecture",
+      "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+      "course_title": "Data Engineering",
+      "started_at": "2026-06-13T10:25:00Z",
+      "submitted_at": "2026-06-13T10:30:00Z",
+      "status": "graded",
+      "is_waiting": false,
+      "total_score": 85,
+      "pending_count": 0,
+      "answer_count": 1
+    }
+  ]
+}
+```
+
+### `DELETE /api/users/{user_id}/exams/{attempt_id}`
+
+Deletes one assessment attempt for a user. The attempt answers and generated answer justifications are deleted through database cascades.
+
+```bash
+curl -X DELETE http://localhost:8080/api/users/2a58cc88-5cb6-432d-bcaf-4ff12c010e3b/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2
+```
+
+Response:
+
+```json
+{
+  "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
+  "deleted": true
+}
+```
+
 ### `POST /api/exams/{attempt_id}/submit`
 
-Submits answers, stores them immediately, and queues grading in the background. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM. Every submitted question must belong to the attempt video.
+Submits answers, stores them immediately, and queues grading in the background. MCQ and true/false answers are graded from stored choices; free-form answers are graded through the local LLM. Every submitted question must belong to the same course as the attempt's source video, so a question-bank exam can include questions from multiple lessons in one course.
 
 ```bash
 curl -X POST http://localhost:8080/api/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2/submit \
@@ -870,6 +926,7 @@ Response:
   "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
   "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
   "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "started_at": "2026-06-13T10:25:00Z",
   "submitted_at": "2026-06-13T10:30:00Z",
   "status": "grading",
   "is_waiting": true,

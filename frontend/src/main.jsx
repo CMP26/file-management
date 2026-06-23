@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleHelp,
+  ClipboardCheck,
   Clock3,
   CloudDownload,
   FileText,
@@ -223,6 +224,7 @@ function App() {
     { id: "library", label: "Library", icon: Library },
     { id: "documents", label: "Documents", icon: FileText },
     { id: "question-bank", label: "Question Bank", icon: FileQuestion },
+    { id: "assessments", label: "Assessments", icon: ClipboardCheck },
     { id: "study", label: "Study Room", icon: Sparkles }
   ];
 
@@ -347,7 +349,15 @@ function App() {
                 />
               )}
               {view === "question-bank" && (
-                <QuestionBankView courses={courses} videos={videos} notify={notify} />
+                <QuestionBankView courses={courses} videos={videos} notify={notify} userId={studentId} />
+              )}
+              {view === "assessments" && (
+                <AssessmentsView
+                  userId={studentId}
+                  studentName={selectedStudent.name}
+                  openStudyRoom={openStudyRoom}
+                  notify={notify}
+                />
               )}
               {view === "study" && (
                 <StudyRoom
@@ -693,11 +703,14 @@ function DocumentsView({ documents, courses, openUpload, refresh, notify }) {
   );
 }
 
-function QuestionBankView({ courses, videos, notify }) {
+function QuestionBankView({ courses, videos, notify, userId }) {
   const [courseId, setCourseId] = useState(courses[0]?.id || "");
   const [count, setCount] = useState(10);
   const [type, setType] = useState("");
   const [questions, setQuestions] = useState([]);
+  const [attemptId, setAttemptId] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -712,6 +725,9 @@ function QuestionBankView({ courses, videos, notify }) {
       if (type) params.set("type", type);
       const data = await api(`/api/courses/${courseId}/questions/random?${params}`);
       setQuestions(data.questions || []);
+      setAttemptId(null);
+      setAnswers({});
+      setResult(null);
     } catch (error) {
       notify(error.message, "danger");
     } finally {
@@ -719,8 +735,64 @@ function QuestionBankView({ courses, videos, notify }) {
     }
   };
 
+  const startExam = async () => {
+    const firstVideoId = questions[0]?.source_video?.id;
+    if (!firstVideoId) return;
+    try {
+      const data = await api(`/api/videos/${firstVideoId}/exams/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_id: userId })
+      });
+      setAttemptId(data.attempt_id);
+      setAnswers({});
+      setResult(null);
+      notify("Question bank exam started.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const submitExam = async () => {
+    if (!attemptId) return;
+    const missing = questions.find((question) => !String(answers[question.id] || "").trim());
+    if (missing) {
+      notify("Answer every question before submitting.", "danger");
+      return;
+    }
+    try {
+      const data = await api(`/api/exams/${attemptId}/submit`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          answers: questions.map((question) => ({
+            question_id: question.id,
+            user_answer: answers[question.id]
+          }))
+        })
+      });
+      setResult(data);
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  useEffect(() => {
+    if (!attemptId || !result?.is_waiting) return undefined;
+    const stream = new EventSource(`${API_BASE}/api/exams/${attemptId}/events`);
+    stream.addEventListener("exam", (event) => {
+      const snapshot = JSON.parse(event.data);
+      setResult(snapshot);
+      if (!snapshot.is_waiting) stream.close();
+    });
+    stream.onerror = () => stream.close();
+    return () => stream.close();
+  }, [attemptId, result?.is_waiting]);
+
   const course = courses.find((item) => item.id === courseId);
   const sourceCount = new Set(questions.map((question) => question.source_video.id)).size;
+  const isExamStarted = Boolean(attemptId);
+  const isSubmitted = Boolean(result);
 
   return (
     <div className="page-stack">
@@ -746,30 +818,272 @@ function QuestionBankView({ courses, videos, notify }) {
           <div><strong>{questions.length}</strong><span>questions</span></div>
           <div><strong>{sourceCount}</strong><span>source lessons</span></div>
           <div><strong>{course?.title}</strong><span>course</span></div>
+          {result && <div><strong>{result.total_score}</strong><span>score</span></div>}
+          {result?.is_waiting && <div><strong>{result.pending_count}</strong><span>pending grades</span></div>}
+          <div className="bank-summary-actions">
+            {!isExamStarted ? (
+              <button className="button primary" onClick={startExam}>
+                <Play size={17} /> Start exam
+              </button>
+            ) : !isSubmitted ? (
+              <button className="button primary" onClick={submitExam}>
+                <Check size={17} /> Submit answers
+              </button>
+            ) : result.is_waiting ? (
+              <span className="waiting-label"><LoaderCircle className="spin" size={16} /> Grading</span>
+            ) : (
+              <StatusPill status={result.status} />
+            )}
+          </div>
         </div>
       )}
 
       <section className="question-bank-list">
-        {questions.map((question, index) => (
-          <article className="bank-question" key={question.id}>
-            <div className="question-index">{String(index + 1).padStart(2, "0")}</div>
-            <div className="question-content">
-              <div className="question-meta">
-                <span>{question.source_video.title}</span>
-                {question.topic_label && <span>{question.topic_label}</span>}
-                <span>{titleCase(question.question_type)}</span>
-              </div>
-              <h3>{question.stem}</h3>
-              {question.choices?.length > 0 && (
-                <div className="choice-preview">
-                  {question.choices.map((choice) => <span key={choice.label}><b>{choice.label}</b>{choice.text}</span>)}
+        {questions.map((question, index) => {
+          const graded = result?.answers?.find((answer) => answer.question_id === question.id)
+            || result?.breakdown?.find((answer) => answer.question_id === question.id);
+          return (
+            <article className={classNames("bank-question", graded && (graded.is_correct ? "correct" : "incorrect"))} key={question.id}>
+              <div className="question-index">{String(index + 1).padStart(2, "0")}</div>
+              <div className="question-content">
+                <div className="question-meta">
+                  <span>{question.source_video.title}</span>
+                  {question.topic_label && <span>{question.topic_label}</span>}
+                  <span>{titleCase(question.question_type)}</span>
                 </div>
-              )}
-            </div>
-          </article>
-        ))}
+                <h3>{question.stem}</h3>
+                {question.choices?.length > 0 ? (
+                  isExamStarted ? (
+                    <div className="answer-options">
+                      {question.choices.map((choice) => (
+                        <label key={choice.label} className={answers[question.id] === choice.label ? "selected" : ""}>
+                          <input
+                            type="radio"
+                            name={`bank-${question.id}`}
+                            value={choice.label}
+                            checked={answers[question.id] === choice.label}
+                            onChange={() => setAnswers((current) => ({ ...current, [question.id]: choice.label }))}
+                            disabled={isSubmitted}
+                          />
+                          <b>{choice.label}</b><span>{choice.text}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="choice-preview">
+                      {question.choices.map((choice) => <span key={choice.label}><b>{choice.label}</b>{choice.text}</span>)}
+                    </div>
+                  )
+                ) : (
+                  isExamStarted && (
+                    <textarea
+                      value={answers[question.id] || ""}
+                      onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                      placeholder="Write your answer"
+                      disabled={isSubmitted}
+                    />
+                  )
+                )}
+                {graded && (
+                  <div className="grade-feedback">
+                    <span className={graded.is_correct ? "good-text" : "bad-text"}>{graded.is_correct ? "Correct" : "Needs review"} · {graded.score}/100</span>
+                  </div>
+                )}
+                {isSubmitted && !graded && (
+                  <div className="grade-feedback">
+                    <span className="waiting-label"><LoaderCircle className="spin" size={14} /> Waiting for grade</span>
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })}
         {!questions.length && <EmptyState icon={CircleHelp} title="Build a question set" body="Choose a course, count, and optional type to draw from its lesson bank." />}
       </section>
+    </div>
+  );
+}
+
+function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
+  const [attempts, setAttempts] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [questionMap, setQuestionMap] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  const loadAttempts = async (preferredId) => {
+    setLoading(true);
+    try {
+      const data = await api(`/api/users/${userId}/exams`);
+      const nextAttempts = data.attempts || [];
+      setAttempts(nextAttempts);
+      const nextId = preferredId || activeId || nextAttempts[0]?.attempt_id || null;
+      setActiveId(nextId);
+      if (nextId) {
+        await loadAttempt(nextId, nextAttempts.find((attempt) => attempt.attempt_id === nextId));
+      } else {
+        setDetail(null);
+        setQuestionMap({});
+      }
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadAttempt = async (attemptId, summary) => {
+    try {
+      const snapshot = await api(`/api/exams/${attemptId}`);
+      const attemptSummary = summary || attempts.find((attempt) => attempt.attempt_id === attemptId);
+      const questionsData = await api(`/api/videos/${snapshot.video_id}/questions`);
+      const nextQuestionMap = {};
+      (questionsData.topics || []).forEach((topic) => {
+        (topic.questions || []).forEach((question) => {
+          nextQuestionMap[question.id] = { ...question, topicLabel: topic.label };
+        });
+      });
+      setActiveId(attemptId);
+      setDetail({ ...snapshot, summary: attemptSummary });
+      setQuestionMap(nextQuestionMap);
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const removeAttempt = async () => {
+    if (!activeId || !window.confirm("Delete this assessment attempt and its saved answers?")) return;
+    try {
+      await api(`/api/users/${userId}/exams/${activeId}`, { method: "DELETE" });
+      notify("Assessment attempt deleted.", "success");
+      const remaining = attempts.filter((attempt) => attempt.attempt_id !== activeId);
+      const nextAttempt = remaining[0] || null;
+      setAttempts(remaining);
+      setActiveId(nextAttempt?.attempt_id || null);
+      setDetail(null);
+      setQuestionMap({});
+      if (nextAttempt) await loadAttempt(nextAttempt.attempt_id, nextAttempt);
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  useEffect(() => {
+    setAttempts([]);
+    setActiveId(null);
+    setDetail(null);
+    setQuestionMap({});
+    loadAttempts();
+  }, [userId]);
+
+  useEffect(() => {
+    if (!activeId || !detail?.is_waiting) return undefined;
+    const stream = new EventSource(`${API_BASE}/api/exams/${activeId}/events`);
+    stream.addEventListener("exam", (event) => {
+      const snapshot = JSON.parse(event.data);
+      setDetail((current) => ({ ...snapshot, summary: current?.summary }));
+      if (!snapshot.is_waiting) {
+        stream.close();
+        loadAttempts(activeId);
+      }
+    });
+    stream.onerror = () => stream.close();
+    return () => stream.close();
+  }, [activeId, detail?.is_waiting]);
+
+  const selectedSummary = detail?.summary || attempts.find((attempt) => attempt.attempt_id === activeId);
+  const gradedCount = (detail?.answers || []).filter((answer) => answer.graded_at).length;
+
+  return (
+    <div className="page-stack">
+      <section className="page-heading compact">
+        <div><h1>Assessments</h1><p>Previous assessment attempts for {studentName}.</p></div>
+      </section>
+
+      {loading && !attempts.length ? <LoadingState label="Loading assessments" /> : (
+        <section className="master-detail assessment-history">
+          <aside className="master-list">
+            <div className="list-label">Attempts <span>{attempts.length}</span></div>
+            {attempts.map((attempt) => (
+              <button
+                key={attempt.attempt_id}
+                className={classNames("master-item assessment-attempt", activeId === attempt.attempt_id && "active")}
+                onClick={() => loadAttempt(attempt.attempt_id, attempt)}
+              >
+                <ClipboardCheck size={16} />
+                <div>
+                  <strong>{attempt.video_title}</strong>
+                  <span>{attempt.course_title} · {formatDate(attempt.started_at)}</span>
+                </div>
+                {attempt.is_waiting ? <LoaderCircle className="spin" size={14} /> : <span>{attempt.total_score}</span>}
+              </button>
+            ))}
+            {!attempts.length && <p className="muted-copy padded">No assessments have been started by this student.</p>}
+          </aside>
+
+          <div className="detail-pane">
+            {detail ? (
+              <>
+                <div className="detail-title">
+                  <div>
+                    <p className="eyebrow">{selectedSummary?.course_title || "Assessment"}</p>
+                    <h2>{selectedSummary?.video_title || "Assessment attempt"}</h2>
+                    <p>{formatDate(detail.started_at)} · {detail.submitted_at ? `Submitted ${formatDate(detail.submitted_at)}` : "Not submitted yet"}</p>
+                  </div>
+                  <div className="detail-title-actions">
+                    <StatusPill status={detail.status} />
+                    <button className="button secondary" onClick={() => openStudyRoom(detail.video_id)}>
+                      <BookOpen size={16} /> Open lesson
+                    </button>
+                    <button className="icon-button danger" onClick={removeAttempt} title="Delete attempt">
+                      <Trash2 size={17} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="assessment-summary">
+                  <div><strong>{detail.total_score}</strong><span>score</span></div>
+                  <div><strong>{detail.answers?.length || 0}</strong><span>answers</span></div>
+                  <div><strong>{gradedCount}</strong><span>graded</span></div>
+                  <div><strong>{detail.pending_count}</strong><span>pending</span></div>
+                </div>
+
+                <div className="exam-list read-only">
+                  {(detail.answers || []).map((answer, index) => {
+                    const question = questionMap[answer.question_id];
+                    return (
+                      <article className={classNames("exam-question", answer.is_correct != null && (answer.is_correct ? "correct" : "incorrect"))} key={answer.answer_id}>
+                        <div className="exam-number">{index + 1}</div>
+                        <div className="exam-body">
+                          <div className="question-meta">
+                            {question?.topicLabel && <span>{question.topicLabel}</span>}
+                            <span>{titleCase(question?.question_type || "question")}</span>
+                          </div>
+                          <h3>{question?.stem || "Question text is no longer available."}</h3>
+                          <div className="submitted-answer">
+                            <span>Your answer</span>
+                            <p>{answer.user_answer}</p>
+                          </div>
+                          <div className="grade-feedback">
+                            {answer.graded_at ? (
+                              <span className={answer.is_correct ? "good-text" : "bad-text"}>{answer.is_correct ? "Correct" : "Needs review"} · {answer.score}/100</span>
+                            ) : (
+                              <span className="waiting-label"><LoaderCircle className="spin" size={14} /> Waiting for grade</span>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {!detail.answers?.length && <EmptyState icon={FileQuestion} title="No submitted answers" body="This attempt was started but has not been submitted." />}
+                </div>
+              </>
+            ) : (
+              <EmptyState icon={ClipboardCheck} title="No assessment selected" body="Choose a previous attempt to review the submitted answers and score." />
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
