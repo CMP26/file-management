@@ -798,10 +798,10 @@ Optional query parameters:
 | Name | Type | Notes |
 |---|---|---|
 | `count` | integer | Number of random questions to return. Defaults to `10`; maximum is `100` |
-| `type` | string | Filter by question type, such as `mcq`, `true_false`, or `essay` |
+| `type` | string | Filter by question type, such as `mcq`, `true_false`, `completion`, or `essay` |
 
 ```bash
-curl "http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669/questions/random?count=5&type=essay"
+curl "http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669/questions/random?count=5&type=completion"
 ```
 
 Response:
@@ -819,9 +819,9 @@ Response:
       },
       "topic_id": "c095fe07-f23d-4120-8af2-57f8b319a7ab",
       "topic_label": "Introduction",
-      "stem": "What is the lecture about?",
-      "question_type": "essay",
-      "difficulty": "medium",
+      "stem": "Spark runs on the ____.",
+      "question_type": "completion",
+      "difficulty": "hard",
       "choices": []
     }
   ]
@@ -832,12 +832,14 @@ Response:
 
 Returns generated questions grouped by topic.
 
+New video processing generates three concise assessment questions per topic by default: one `easy` MCQ, one `medium` true/false question, and one `hard` one-word `completion` question. Essay questions are only a short-answer fallback and should stay small. These difficulty labels are also used by the adaptive IRT flow.
+
 Optional query parameters:
 
 | Name | Type | Notes |
 |---|---|---|
 | `topic_id` | UUID | Return questions for one topic |
-| `type` | string | Filter by question type, such as `mcq`, `true_false`, or `essay` |
+| `type` | string | Filter by question type, such as `mcq`, `true_false`, `completion`, or `essay` |
 
 ```bash
 curl "http://localhost:8080/api/videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/questions?type=mcq"
@@ -888,9 +890,95 @@ Response:
 }
 ```
 
+### Adaptive Exams
+
+Adaptive exams are a separate turn-by-turn flow. The batch exam endpoints above are unchanged. The adaptive selector uses a 1PL IRT model:
+
+```text
+P(correct) = 1 / (1 + exp(-(theta - b)))
+```
+
+Question difficulty labels map to item difficulty `b` as `easy=-1`, `medium=0`, and `hard=1`. After each answer, the backend updates `theta`, stores the answer, and returns the next unanswered question closest to the current ability estimate. User-facing UI should show `performance_category` (`Excellent`, `Very Good`, `Good`, `Accepted`, or `Fail`) instead of raw theta.
+
+### `POST /api/videos/{video_id}/adaptive-exams/start`
+
+Starts an adaptive attempt for one lesson and returns the first selected question.
+
+```bash
+curl -X POST http://localhost:8080/api/videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/adaptive-exams/start \
+  -H "content-type: application/json" \
+  -d '{
+    "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+    "max_questions": 10
+  }'
+```
+
+### `GET /api/adaptive-exams/{attempt_id}`
+
+Returns the adaptive attempt state, ability estimate, previous answers, and the current `next_question` when the attempt is still active.
+
+### `POST /api/courses/{course_id}/adaptive-exams/start`
+
+Starts an adaptive attempt over the whole course question bank. The selector can choose the next question from any lesson in the course.
+
+```bash
+curl -X POST http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669/adaptive-exams/start \
+  -H "content-type: application/json" \
+  -d '{
+    "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+    "max_questions": 10
+  }'
+```
+
+### `POST /api/adaptive-exams/{attempt_id}/answer`
+
+Submits one answer and returns the updated attempt state plus the next adaptive question.
+
+```bash
+curl -X POST http://localhost:8080/api/adaptive-exams/bf8257d4-cde9-4c0b-a2b0-030ebd527642/answer \
+  -H "content-type: application/json" \
+  -d '{
+    "question_id": "c84ec1f7-a9e8-4018-97d7-a9fef79040b9",
+    "user_answer": "Java runs on the JVM."
+  }'
+```
+
+Response shape:
+
+```json
+{
+  "attempt_id": "bf8257d4-cde9-4c0b-a2b0-030ebd527642",
+  "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+  "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "status": "active",
+  "ability_theta": 0.31,
+  "standard_error": 1.0,
+  "score_percent": 100.0,
+  "performance_category": "Excellent",
+  "max_questions": 10,
+  "answered_count": 1,
+  "next_question": {
+    "id": "8cf5f131-a179-4445-a732-8a8698d96477",
+    "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+    "topic_id": "c095fe07-f23d-4120-8af2-57f8b319a7ab",
+    "topic_label": "Introduction",
+    "stem": "Spark is written in Java.",
+    "question_type": "true_false",
+    "difficulty": "hard",
+    "irt_difficulty": 1.0,
+    "choices": [
+      { "label": "T", "text": "True" },
+      { "label": "F", "text": "False" }
+    ]
+  },
+  "answers": []
+}
+```
+
 ### `GET /api/users/{user_id}/exams`
 
-Lists previous assessment attempts for a user, newest first. Use `video_id` to filter the list to one lesson.
+Lists previous batch and adaptive assessment attempts for a user, newest first. Use `video_id` to filter the list to one lesson. The overall category averages completed results from both assessment types.
 
 Optional query parameters:
 
@@ -907,9 +995,13 @@ Response:
 ```json
 {
   "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
+  "overall_score_percent": 85.0,
+  "overall_category": "Very Good",
+  "completed_assessment_count": 1,
   "attempts": [
     {
       "attempt_id": "11da48d4-f5da-4702-9e94-4faed5dbe2f2",
+      "assessment_type": "batch",
       "user_id": "2a58cc88-5cb6-432d-bcaf-4ff12c010e3b",
       "video_id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
       "video_title": "Demo lecture",
@@ -920,6 +1012,8 @@ Response:
       "status": "graded",
       "is_waiting": false,
       "total_score": 85,
+      "score_percent": 85.0,
+      "performance_category": "Very Good",
       "pending_count": 0,
       "answer_count": 1
     }
@@ -929,7 +1023,7 @@ Response:
 
 ### `DELETE /api/users/{user_id}/exams/{attempt_id}`
 
-Deletes one assessment attempt for a user. The attempt answers and generated answer justifications are deleted through database cascades.
+Deletes one batch or adaptive assessment attempt for a user. The attempt answers and generated answer justifications are deleted through database cascades.
 
 ```bash
 curl -X DELETE http://localhost:8080/api/users/2a58cc88-5cb6-432d-bcaf-4ff12c010e3b/exams/11da48d4-f5da-4702-9e94-4faed5dbe2f2

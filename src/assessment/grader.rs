@@ -28,6 +28,21 @@ pub async fn grade_answer(
         return Ok(result);
     }
 
+    if is_completion_question(&question.question_type) {
+        let expected_answer = expected_completion_answer(question.rubric.as_deref());
+        let is_correct = expected_answer
+            .as_deref()
+            .map(|expected| {
+                normalize_completion_answer(expected) == normalize_completion_answer(user_answer)
+            })
+            .unwrap_or(false);
+
+        return Ok(GradeResponse {
+            score: if is_correct { 100 } else { 0 },
+            is_correct,
+        });
+    }
+
     let correct_choice: Option<(String,)> = sqlx::query_as(
         "SELECT label FROM choices WHERE question_id = $1 AND is_correct = true LIMIT 1",
     )
@@ -44,4 +59,83 @@ pub async fn grade_answer(
         score: if is_correct { 100 } else { 0 },
         is_correct,
     })
+}
+
+pub(crate) fn is_completion_question(question_type: &str) -> bool {
+    matches!(
+        question_type.trim().to_ascii_lowercase().as_str(),
+        "completion" | "one_word" | "short_answer" | "fill_blank" | "fill-in-the-blank"
+    )
+}
+
+pub(crate) fn expected_completion_answer(rubric: Option<&str>) -> Option<String> {
+    let rubric = rubric?.trim();
+    for line in rubric.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("expected answer:") || lower.starts_with("answer:") {
+            let (_, answer) = trimmed.split_once(':')?;
+            return clean_expected_answer(answer);
+        }
+    }
+
+    if rubric.split_whitespace().count() <= 3 {
+        clean_expected_answer(rubric)
+    } else {
+        None
+    }
+}
+
+fn clean_expected_answer(answer: &str) -> Option<String> {
+    let cleaned = answer
+        .trim()
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '"' | '\'' | '`' | '*' | '.' | ',' | ';' | ':' | '-' | '_'
+                )
+        })
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`' | '*' | '.' | ',' | ';' | ':'))
+        .to_string();
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn normalize_completion_answer(answer: &str) -> String {
+    answer
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expected_completion_answer, normalize_completion_answer};
+
+    #[test]
+    fn extracts_expected_completion_answer_from_rubric() {
+        assert_eq!(
+            expected_completion_answer(Some("Expected answer: Java\nMentioned near JVM.")),
+            Some("Java".to_string())
+        );
+        assert_eq!(
+            expected_completion_answer(Some("Answer: Spark.")),
+            Some("Spark".to_string())
+        );
+    }
+
+    #[test]
+    fn normalizes_completion_answer_case_and_punctuation() {
+        assert_eq!(normalize_completion_answer(" Java. "), "java");
+        assert_eq!(normalize_completion_answer("JAVA"), "java");
+    }
 }

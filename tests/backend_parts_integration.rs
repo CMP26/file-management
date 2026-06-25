@@ -3,6 +3,9 @@ use axum::{
     Json,
 };
 use nexalearn_backend::{
+    assessment::adaptive::{
+        get_adaptive_exam, start_adaptive_exam, start_course_adaptive_exam, submit_adaptive_answer,
+    },
     assessment::handler::{
         get_course_random_questions, get_video_questions, QuestionFilters, RandomQuestionFilters,
     },
@@ -20,7 +23,10 @@ use nexalearn_backend::{
     embedding::OllamaEmbeddingClient,
     ingestion::worker::{infer_video_recovery_stage, prepare_video_recovery, VideoProcessStage},
     llm::gemma::GemmaClient,
-    models::{CreateCourseRequest, StartTranscriptChatRequest, TranscriptChatRequest},
+    models::{
+        CreateCourseRequest, StartAdaptiveExamRequest, StartTranscriptChatRequest,
+        SubmitAdaptiveAnswerRequest, TranscriptChatRequest,
+    },
     storage::rustfs::RustFsClient,
     videos::{get_video, get_video_transcript, list_videos},
     whisper::client::WhisperClient,
@@ -350,6 +356,162 @@ async fn video_question_filters_empty_transcripts_and_missing_records_are_handle
         .await
         .expect_err("missing video should be not found");
     assert!(matches!(missing_video, AppError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn adaptive_exam_selects_questions_by_irt_difficulty_and_updates_ability() {
+    let Some(ctx) = TestContext::new().await else {
+        return;
+    };
+
+    let user_id = Uuid::new_v4();
+    let course_id = insert_course(&ctx.state.pool, "Adaptive integration").await;
+    let video_id = insert_video(&ctx.state.pool, course_id, "Adaptive lesson").await;
+    let topic_id = insert_topic(&ctx.state.pool, video_id, "IRT topic").await;
+    let easy_id =
+        insert_difficulty_question(&ctx.state.pool, video_id, Some(topic_id), "Easy?", "easy")
+            .await;
+    let medium_id = insert_difficulty_question(
+        &ctx.state.pool,
+        video_id,
+        Some(topic_id),
+        "Medium?",
+        "medium",
+    )
+    .await;
+    let hard_id =
+        insert_difficulty_question(&ctx.state.pool, video_id, Some(topic_id), "Hard?", "hard")
+            .await;
+    for question_id in [easy_id, medium_id, hard_id] {
+        insert_choice(&ctx.state.pool, question_id, "A", true).await;
+        insert_choice(&ctx.state.pool, question_id, "B", false).await;
+    }
+
+    let started = start_adaptive_exam(
+        State(ctx.state.clone()),
+        Path(video_id),
+        Json(StartAdaptiveExamRequest {
+            user_id,
+            max_questions: Some(2),
+        }),
+    )
+    .await
+    .expect("start adaptive exam")
+    .0;
+    assert_eq!(started.ability_theta, 0.0);
+    assert_eq!(
+        started.next_question.as_ref().map(|q| q.id),
+        Some(medium_id)
+    );
+
+    let after_first = submit_adaptive_answer(
+        State(ctx.state.clone()),
+        Path(started.attempt_id),
+        Json(SubmitAdaptiveAnswerRequest {
+            question_id: medium_id,
+            user_answer: "A".to_string(),
+        }),
+    )
+    .await
+    .expect("submit first adaptive answer")
+    .0;
+    assert_eq!(after_first.answered_count, 1);
+    assert!(after_first.ability_theta > 0.0);
+    assert_eq!(
+        after_first.next_question.as_ref().map(|q| q.id),
+        Some(hard_id)
+    );
+
+    let completed = submit_adaptive_answer(
+        State(ctx.state.clone()),
+        Path(started.attempt_id),
+        Json(SubmitAdaptiveAnswerRequest {
+            question_id: hard_id,
+            user_answer: "B".to_string(),
+        }),
+    )
+    .await
+    .expect("submit second adaptive answer")
+    .0;
+    assert_eq!(completed.status, "completed");
+    assert_eq!(completed.answered_count, 2);
+    assert!(completed.next_question.is_none());
+
+    let fetched = get_adaptive_exam(State(ctx.state.clone()), Path(started.attempt_id))
+        .await
+        .expect("get adaptive status")
+        .0;
+    assert_eq!(fetched.status, "completed");
+    assert_eq!(fetched.answers.len(), 2);
+}
+
+#[tokio::test]
+async fn course_adaptive_exam_uses_question_bank_across_lessons() {
+    let Some(ctx) = TestContext::new().await else {
+        return;
+    };
+
+    let user_id = Uuid::new_v4();
+    let course_id = insert_course(&ctx.state.pool, "Course adaptive integration").await;
+    let first_video_id = insert_video(&ctx.state.pool, course_id, "First adaptive lesson").await;
+    let second_video_id = insert_video(&ctx.state.pool, course_id, "Second adaptive lesson").await;
+    let first_topic_id = insert_topic(&ctx.state.pool, first_video_id, "First topic").await;
+    let second_topic_id = insert_topic(&ctx.state.pool, second_video_id, "Second topic").await;
+    let easy_id = insert_difficulty_question(
+        &ctx.state.pool,
+        first_video_id,
+        Some(first_topic_id),
+        "Course easy?",
+        "easy",
+    )
+    .await;
+    let medium_id = insert_difficulty_question(
+        &ctx.state.pool,
+        second_video_id,
+        Some(second_topic_id),
+        "Course medium?",
+        "medium",
+    )
+    .await;
+    for question_id in [easy_id, medium_id] {
+        insert_choice(&ctx.state.pool, question_id, "A", true).await;
+        insert_choice(&ctx.state.pool, question_id, "B", false).await;
+    }
+
+    let started = start_course_adaptive_exam(
+        State(ctx.state.clone()),
+        Path(course_id),
+        Json(StartAdaptiveExamRequest {
+            user_id,
+            max_questions: Some(2),
+        }),
+    )
+    .await
+    .expect("start course adaptive exam")
+    .0;
+    assert_eq!(started.video_id, None);
+    assert_eq!(started.course_id, course_id);
+    assert_eq!(
+        started.next_question.as_ref().map(|q| q.id),
+        Some(medium_id)
+    );
+
+    let after_first = submit_adaptive_answer(
+        State(ctx.state.clone()),
+        Path(started.attempt_id),
+        Json(SubmitAdaptiveAnswerRequest {
+            question_id: medium_id,
+            user_answer: "A".to_string(),
+        }),
+    )
+    .await
+    .expect("submit course adaptive answer")
+    .0;
+    assert_eq!(after_first.answered_count, 1);
+    assert_eq!(
+        after_first.next_question.as_ref().map(|q| q.id),
+        Some(easy_id)
+    );
 }
 
 #[tokio::test]
@@ -943,15 +1105,37 @@ async fn insert_typed_question(
     stem: &str,
     question_type: &str,
 ) -> Uuid {
+    insert_question_with_difficulty(pool, video_id, topic_id, stem, question_type, "easy").await
+}
+
+async fn insert_difficulty_question(
+    pool: &PgPool,
+    video_id: Uuid,
+    topic_id: Option<Uuid>,
+    stem: &str,
+    difficulty: &str,
+) -> Uuid {
+    insert_question_with_difficulty(pool, video_id, topic_id, stem, "mcq", difficulty).await
+}
+
+async fn insert_question_with_difficulty(
+    pool: &PgPool,
+    video_id: Uuid,
+    topic_id: Option<Uuid>,
+    stem: &str,
+    question_type: &str,
+    difficulty: &str,
+) -> Uuid {
     let question_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO questions (id, video_id, topic_id, stem, question_type, difficulty) VALUES ($1, $2, $3, $4, $5, 'easy')",
+        "INSERT INTO questions (id, video_id, topic_id, stem, question_type, difficulty) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(question_id)
     .bind(video_id)
     .bind(topic_id)
     .bind(stem)
     .bind(question_type)
+    .bind(difficulty)
     .execute(pool)
     .await
     .expect("insert question");

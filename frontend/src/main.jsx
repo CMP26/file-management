@@ -99,6 +99,20 @@ function titleCase(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function isCompletionQuestion(questionType) {
+  return ["completion", "one_word", "short_answer", "fill_blank", "fill-in-the-blank"].includes(
+    String(questionType || "").trim().toLowerCase()
+  );
+}
+
+function formatScorePercent(value) {
+  return value == null ? "--" : `${Math.round(Number(value))}%`;
+}
+
+function categoryClass(category) {
+  return String(category || "unrated").toLowerCase().replaceAll(" ", "-");
+}
+
 function canRecoverUpload(status) {
   return status && status !== "ready";
 }
@@ -798,6 +812,7 @@ function DocumentsView({ documents, courses, openUpload, refresh, notify, recove
 }
 
 function QuestionBankView({ courses, videos, notify, userId }) {
+  const [mode, setMode] = useState("random");
   const [courseId, setCourseId] = useState(courses[0]?.id || "");
   const [count, setCount] = useState(10);
   const [type, setType] = useState("");
@@ -806,6 +821,9 @@ function QuestionBankView({ courses, videos, notify, userId }) {
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [adaptive, setAdaptive] = useState(null);
+  const [adaptiveAnswer, setAdaptiveAnswer] = useState("");
+  const [adaptiveBusy, setAdaptiveBusy] = useState(false);
 
   useEffect(() => {
     if (!courseId && courses.length) setCourseId(courses[0].id);
@@ -822,6 +840,8 @@ function QuestionBankView({ courses, videos, notify, userId }) {
       setAttemptId(null);
       setAnswers({});
       setResult(null);
+      setAdaptive(null);
+      setAdaptiveAnswer("");
     } catch (error) {
       notify(error.message, "danger");
     } finally {
@@ -883,6 +903,47 @@ function QuestionBankView({ courses, videos, notify, userId }) {
     return () => stream.close();
   }, [attemptId, result?.is_waiting]);
 
+  const startAdaptive = async () => {
+    if (!courseId) return;
+    setAdaptiveBusy(true);
+    try {
+      const data = await api(`/api/courses/${courseId}/adaptive-exams/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_id: userId, max_questions: Math.min(Math.max(Number(count) || 10, 1), 30) })
+      });
+      setAdaptive(data);
+      setAdaptiveAnswer("");
+      notify("Question bank adaptive exam started.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setAdaptiveBusy(false);
+    }
+  };
+
+  const submitAdaptive = async (event) => {
+    event.preventDefault();
+    if (!adaptive?.next_question || !adaptiveAnswer.trim()) return;
+    setAdaptiveBusy(true);
+    try {
+      const data = await api(`/api/adaptive-exams/${adaptive.attempt_id}/answer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          question_id: adaptive.next_question.id,
+          user_answer: adaptiveAnswer.trim()
+        })
+      });
+      setAdaptive(data);
+      setAdaptiveAnswer("");
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setAdaptiveBusy(false);
+    }
+  };
+
   const course = courses.find((item) => item.id === courseId);
   const sourceCount = new Set(questions.map((question) => question.source_video.id)).size;
   const isExamStarted = Boolean(attemptId);
@@ -893,6 +954,10 @@ function QuestionBankView({ courses, videos, notify, userId }) {
       <section className="page-heading compact">
         <div><h1>Question bank</h1><p>Sample questions across every lesson in a course.</p></div>
       </section>
+      <div className="segmented assessment-mode-tabs">
+        <button className={mode === "random" ? "active" : ""} onClick={() => setMode("random")}><FileQuestion size={16} /> Random set</button>
+        <button className={mode === "adaptive" ? "active" : ""} onClick={() => setMode("adaptive")}><Activity size={16} /> Adaptive</button>
+      </div>
       <section className="bank-toolbar">
         <label><span>Course</span><select value={courseId} onChange={(event) => setCourseId(event.target.value)}>
           <option value="">Select a course</option>
@@ -900,14 +965,26 @@ function QuestionBankView({ courses, videos, notify, userId }) {
         </select></label>
         <label><span>Questions</span><input type="number" min="1" max="100" value={count} onChange={(event) => setCount(Number(event.target.value))} /></label>
         <label><span>Type</span><select value={type} onChange={(event) => setType(event.target.value)}>
-          <option value="">All types</option><option value="mcq">Multiple choice</option><option value="true_false">True / false</option><option value="essay">Essay</option>
+          <option value="">All types</option><option value="mcq">Multiple choice</option><option value="true_false">True / false</option><option value="completion">One-word completion</option><option value="essay">Short essay</option>
         </select></label>
         <button className="button primary" onClick={generate} disabled={!courseId || loading}>
           {loading ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} Generate set
         </button>
       </section>
 
-      {questions.length > 0 && (
+      {mode === "adaptive" && (
+        <AdaptiveAssessmentPanel
+          adaptive={adaptive}
+          busy={adaptiveBusy}
+          answer={adaptiveAnswer}
+          setAnswer={setAdaptiveAnswer}
+          start={startAdaptive}
+          submit={submitAdaptive}
+          questionCount={course?.question_count || questions.length}
+        />
+      )}
+
+      {mode === "random" && questions.length > 0 && (
         <div className="bank-summary">
           <div><strong>{questions.length}</strong><span>questions</span></div>
           <div><strong>{sourceCount}</strong><span>source lessons</span></div>
@@ -932,7 +1009,7 @@ function QuestionBankView({ courses, videos, notify, userId }) {
         </div>
       )}
 
-      <section className="question-bank-list">
+      {mode === "random" && <section className="question-bank-list">
         {questions.map((question, index) => {
           const graded = result?.answers?.find((answer) => answer.question_id === question.id)
             || result?.breakdown?.find((answer) => answer.question_id === question.id);
@@ -968,6 +1045,16 @@ function QuestionBankView({ courses, videos, notify, userId }) {
                       {question.choices.map((choice) => <span key={choice.label}><b>{choice.label}</b>{choice.text}</span>)}
                     </div>
                   )
+                ) : isCompletionQuestion(question.question_type) ? (
+                  isExamStarted && (
+                    <input
+                      className="one-word-answer"
+                      value={answers[question.id] || ""}
+                      onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                      placeholder="One-word answer"
+                      disabled={isSubmitted}
+                    />
+                  )
                 ) : (
                   isExamStarted && (
                     <textarea
@@ -993,17 +1080,19 @@ function QuestionBankView({ courses, videos, notify, userId }) {
           );
         })}
         {!questions.length && <EmptyState icon={CircleHelp} title="Build a question set" body="Choose a course, count, and optional type to draw from its lesson bank." />}
-      </section>
+      </section>}
     </div>
   );
 }
 
 function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
   const [attempts, setAttempts] = useState([]);
+  const [overall, setOverall] = useState(null);
   const [activeId, setActiveId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [questionMap, setQuestionMap] = useState({});
   const [loading, setLoading] = useState(false);
+  const [justifications, setJustifications] = useState({});
 
   const loadAttempts = async (preferredId) => {
     setLoading(true);
@@ -1011,6 +1100,11 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
       const data = await api(`/api/users/${userId}/exams`);
       const nextAttempts = data.attempts || [];
       setAttempts(nextAttempts);
+      setOverall({
+        score: data.overall_score_percent,
+        category: data.overall_category,
+        count: data.completed_assessment_count || 0
+      });
       const nextId = preferredId || activeId || nextAttempts[0]?.attempt_id || null;
       setActiveId(nextId);
       if (nextId) {
@@ -1028,8 +1122,34 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
 
   const loadAttempt = async (attemptId, summary) => {
     try {
-      const snapshot = await api(`/api/exams/${attemptId}`);
       const attemptSummary = summary || attempts.find((attempt) => attempt.attempt_id === attemptId);
+      if (attemptSummary?.assessment_type === "adaptive") {
+        const snapshot = await api(`/api/adaptive-exams/${attemptId}`);
+        const nextQuestionMap = {};
+        (snapshot.answers || []).forEach((answer) => {
+          if (answer.question) {
+            nextQuestionMap[answer.question_id] = {
+              ...answer.question,
+              topicLabel: answer.question.topic_label
+            };
+          }
+        });
+        setActiveId(attemptId);
+        setDetail({
+          ...snapshot,
+          assessment_type: "adaptive",
+          submitted_at: snapshot.completed_at,
+          is_waiting: snapshot.status === "active",
+          total_score: (snapshot.answers || []).reduce((sum, answer) => sum + (answer.score || 0), 0),
+          pending_count: 0,
+          summary: attemptSummary
+        });
+        setQuestionMap(nextQuestionMap);
+        setJustifications({});
+        return;
+      }
+
+      const snapshot = await api(`/api/exams/${attemptId}`);
       const questionsData = await api(`/api/videos/${snapshot.video_id}/questions`);
       const nextQuestionMap = {};
       (questionsData.topics || []).forEach((topic) => {
@@ -1038,8 +1158,9 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
         });
       });
       setActiveId(attemptId);
-      setDetail({ ...snapshot, summary: attemptSummary });
+      setDetail({ ...snapshot, assessment_type: "batch", summary: attemptSummary });
       setQuestionMap(nextQuestionMap);
+      setJustifications({});
     } catch (error) {
       notify(error.message, "danger");
     }
@@ -1056,7 +1177,8 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
       setActiveId(nextAttempt?.attempt_id || null);
       setDetail(null);
       setQuestionMap({});
-      if (nextAttempt) await loadAttempt(nextAttempt.attempt_id, nextAttempt);
+      setJustifications({});
+      await loadAttempts(nextAttempt?.attempt_id);
     } catch (error) {
       notify(error.message, "danger");
     }
@@ -1064,14 +1186,37 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
 
   useEffect(() => {
     setAttempts([]);
+    setOverall(null);
     setActiveId(null);
     setDetail(null);
     setQuestionMap({});
+    setJustifications({});
     loadAttempts();
   }, [userId]);
 
+  const explainAnswer = async (answerId) => {
+    if (!activeId) return;
+    setJustifications((current) => ({ ...current, [answerId]: { is_waiting: true } }));
+    try {
+      const initial = await api(`/api/exams/${activeId}/answers/${answerId}/justification/start`, { method: "POST" });
+      if (!initial.is_waiting) {
+        setJustifications((current) => ({ ...current, [answerId]: initial }));
+        return;
+      }
+      const stream = new EventSource(`${API_BASE}/api/exams/${activeId}/answers/${answerId}/justification/events`);
+      stream.addEventListener("justification", (event) => {
+        const snapshot = JSON.parse(event.data);
+        setJustifications((current) => ({ ...current, [answerId]: snapshot }));
+        if (!snapshot.is_waiting) stream.close();
+      });
+      stream.onerror = () => stream.close();
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
   useEffect(() => {
-    if (!activeId || !detail?.is_waiting) return undefined;
+    if (!activeId || !detail?.is_waiting || detail?.assessment_type === "adaptive") return undefined;
     const stream = new EventSource(`${API_BASE}/api/exams/${activeId}/events`);
     stream.addEventListener("exam", (event) => {
       const snapshot = JSON.parse(event.data);
@@ -1083,15 +1228,22 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
     });
     stream.onerror = () => stream.close();
     return () => stream.close();
-  }, [activeId, detail?.is_waiting]);
+  }, [activeId, detail?.is_waiting, detail?.assessment_type]);
 
   const selectedSummary = detail?.summary || attempts.find((attempt) => attempt.attempt_id === activeId);
   const gradedCount = (detail?.answers || []).filter((answer) => answer.graded_at).length;
+  const detailCategory = detail?.performance_category || selectedSummary?.performance_category;
+  const detailScore = detail?.score_percent ?? selectedSummary?.score_percent;
+  const isAdaptiveDetail = detail?.assessment_type === "adaptive" || selectedSummary?.assessment_type === "adaptive";
 
   return (
     <div className="page-stack">
       <section className="page-heading compact">
         <div><h1>Assessments</h1><p>Previous assessment attempts for {studentName}.</p></div>
+        <div className={classNames("category-badge large", categoryClass(overall?.category))}>
+          <strong>{overall?.category || "Unrated"}</strong>
+          <span>{formatScorePercent(overall?.score)} average · {overall?.count || 0} completed</span>
+        </div>
       </section>
 
       {loading && !attempts.length ? <LoadingState label="Loading assessments" /> : (
@@ -1107,9 +1259,13 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
                 <ClipboardCheck size={16} />
                 <div>
                   <strong>{attempt.video_title}</strong>
-                  <span>{attempt.course_title} · {formatDate(attempt.started_at)}</span>
+                  <span>{titleCase(attempt.assessment_type)} · {attempt.course_title} · {formatDate(attempt.started_at)}</span>
                 </div>
-                {attempt.is_waiting ? <LoaderCircle className="spin" size={14} /> : <span>{attempt.total_score}</span>}
+                {attempt.is_waiting ? <LoaderCircle className="spin" size={14} /> : (
+                  <span className={classNames("category-badge", categoryClass(attempt.performance_category))}>
+                    {attempt.performance_category || "Unrated"}
+                  </span>
+                )}
               </button>
             ))}
             {!attempts.length && <p className="muted-copy padded">No assessments have been started by this student.</p>}
@@ -1125,10 +1281,11 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
                     <p>{formatDate(detail.started_at)} · {detail.submitted_at ? `Submitted ${formatDate(detail.submitted_at)}` : "Not submitted yet"}</p>
                   </div>
                   <div className="detail-title-actions">
+                    {detailCategory && <span className={classNames("category-badge", categoryClass(detailCategory))}>{detailCategory}</span>}
                     <StatusPill status={detail.status} />
-                    <button className="button secondary" onClick={() => openStudyRoom(detail.video_id)}>
+                    {detail.video_id && <button className="button secondary" onClick={() => openStudyRoom(detail.video_id)}>
                       <BookOpen size={16} /> Open lesson
-                    </button>
+                    </button>}
                     <button className="icon-button danger" onClick={removeAttempt} title="Delete attempt">
                       <Trash2 size={17} />
                     </button>
@@ -1136,15 +1293,18 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
                 </div>
 
                 <div className="assessment-summary">
-                  <div><strong>{detail.total_score}</strong><span>score</span></div>
+                  <div><strong>{formatScorePercent(detailScore)}</strong><span>performance</span></div>
+                  <div><strong>{detail.total_score}</strong><span>points</span></div>
                   <div><strong>{detail.answers?.length || 0}</strong><span>answers</span></div>
-                  <div><strong>{gradedCount}</strong><span>graded</span></div>
+                  <div><strong>{isAdaptiveDetail ? detail.answers?.length || 0 : gradedCount}</strong><span>graded</span></div>
                   <div><strong>{detail.pending_count}</strong><span>pending</span></div>
                 </div>
 
                 <div className="exam-list read-only">
                   {(detail.answers || []).map((answer, index) => {
                     const question = questionMap[answer.question_id];
+                    const justification = justifications[answer.answer_id];
+                    const answerGraded = isAdaptiveDetail || answer.graded_at;
                     return (
                       <article className={classNames("exam-question", answer.is_correct != null && (answer.is_correct ? "correct" : "incorrect"))} key={answer.answer_id}>
                         <div className="exam-number">{index + 1}</div>
@@ -1159,8 +1319,14 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
                             <p>{answer.user_answer}</p>
                           </div>
                           <div className="grade-feedback">
-                            {answer.graded_at ? (
-                              <span className={answer.is_correct ? "good-text" : "bad-text"}>{answer.is_correct ? "Correct" : "Needs review"} · {answer.score}/100</span>
+                            {answerGraded ? (
+                              <>
+                                <span className={answer.is_correct ? "good-text" : "bad-text"}>{answer.is_correct ? "Correct" : "Needs review"} · {answer.score}/100</span>
+                                {!isAdaptiveDetail && <button className="text-button" onClick={() => explainAnswer(answer.answer_id)} disabled={justification?.is_waiting}>
+                                  {justification?.is_waiting ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} Explain
+                                </button>}
+                                {justification?.justification && <p>{justification.justification}</p>}
+                              </>
                             ) : (
                               <span className="waiting-label"><LoaderCircle className="spin" size={14} /> Waiting for grade</span>
                             )}
@@ -1552,12 +1718,16 @@ function ChatTab({ videoId, playerRef, notify, userId, studentName }) {
 }
 
 function AssessmentTab({ videoId, notify, userId }) {
+  const [mode, setMode] = useState("batch");
   const [groups, setGroups] = useState([]);
   const [attemptId, setAttemptId] = useState(null);
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [justifications, setJustifications] = useState({});
+  const [adaptive, setAdaptive] = useState(null);
+  const [adaptiveAnswer, setAdaptiveAnswer] = useState("");
+  const [adaptiveBusy, setAdaptiveBusy] = useState(false);
 
   const questions = groups.flatMap((group) => group.questions.map((question) => ({ ...question, topicLabel: group.label })));
 
@@ -1569,6 +1739,8 @@ function AssessmentTab({ videoId, notify, userId }) {
       setAttemptId(null);
       setResult(null);
       setAnswers({});
+      setAdaptive(null);
+      setAdaptiveAnswer("");
     } catch (error) {
       notify(error.message, "danger");
     } finally {
@@ -1577,6 +1749,46 @@ function AssessmentTab({ videoId, notify, userId }) {
   };
 
   useEffect(() => { loadQuestions(); }, [videoId, userId]);
+
+  const startAdaptive = async () => {
+    setAdaptiveBusy(true);
+    try {
+      const data = await api(`/api/videos/${videoId}/adaptive-exams/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_id: userId, max_questions: 10 })
+      });
+      setAdaptive(data);
+      setAdaptiveAnswer("");
+      notify("Adaptive assessment started.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setAdaptiveBusy(false);
+    }
+  };
+
+  const submitAdaptive = async (event) => {
+    event.preventDefault();
+    if (!adaptive?.next_question || !adaptiveAnswer.trim()) return;
+    setAdaptiveBusy(true);
+    try {
+      const data = await api(`/api/adaptive-exams/${adaptive.attempt_id}/answer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          question_id: adaptive.next_question.id,
+          user_answer: adaptiveAnswer.trim()
+        })
+      });
+      setAdaptive(data);
+      setAdaptiveAnswer("");
+    } catch (error) {
+      notify(error.message, "danger");
+    } finally {
+      setAdaptiveBusy(false);
+    }
+  };
 
   const start = async () => {
     const data = await api(`/api/videos/${videoId}/exams/start`, {
@@ -1638,6 +1850,22 @@ function AssessmentTab({ videoId, notify, userId }) {
 
   return (
     <section className="assessment-pane">
+      <div className="segmented assessment-mode-tabs">
+        <button className={mode === "batch" ? "active" : ""} onClick={() => setMode("batch")}><ClipboardCheck size={16} /> Batch</button>
+        <button className={mode === "adaptive" ? "active" : ""} onClick={() => setMode("adaptive")}><Activity size={16} /> Adaptive</button>
+      </div>
+      {mode === "adaptive" ? (
+        <AdaptiveAssessmentPanel
+          adaptive={adaptive}
+          busy={adaptiveBusy}
+          answer={adaptiveAnswer}
+          setAnswer={setAdaptiveAnswer}
+          start={startAdaptive}
+          submit={submitAdaptive}
+          questionCount={questions.length}
+        />
+      ) : (
+        <>
       <div className="assessment-toolbar">
         <div><h2>Lesson assessment</h2><p>{questions.length} generated questions across {groups.length} topics.</p></div>
         {!attemptId ? (
@@ -1670,6 +1898,14 @@ function AssessmentTab({ videoId, notify, userId }) {
                         </label>
                       ))}
                     </div>
+                  ) : isCompletionQuestion(question.question_type) ? (
+                    <input
+                      className="one-word-answer"
+                      value={answers[question.id] || ""}
+                      onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                      placeholder="One-word answer"
+                      disabled={!!result}
+                    />
                   ) : (
                     <textarea value={answers[question.id] || ""} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} placeholder="Write your answer" disabled={!!result} />
                   )}
@@ -1689,7 +1925,100 @@ function AssessmentTab({ videoId, notify, userId }) {
           {!questions.length && <EmptyState icon={FileQuestion} title="No generated questions" body="Questions appear when lesson processing finishes." />}
         </div>
       )}
+      </>
+      )}
     </section>
+  );
+}
+
+function AdaptiveAssessmentPanel({ adaptive, busy, answer, setAnswer, start, submit, questionCount }) {
+  const question = adaptive?.next_question;
+  const lastAnswer = adaptive?.answers?.[adaptive.answers.length - 1];
+  const progress = adaptive ? `${adaptive.answered_count}/${adaptive.max_questions}` : `0/${Math.min(10, questionCount || 10)}`;
+  const category = adaptive?.performance_category || "Unrated";
+
+  return (
+    <div className="adaptive-panel">
+      <div className="assessment-toolbar">
+        <div>
+          <h2>Adaptive assessment</h2>
+          <p>1PL IRT selects the next question closest to current ability.</p>
+        </div>
+        {!adaptive ? (
+          <button className="button primary" onClick={start} disabled={busy || !questionCount}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Activity size={17} />} Start adaptive
+          </button>
+        ) : (
+          <StatusPill status={adaptive.status} />
+        )}
+      </div>
+
+      {adaptive && (
+        <div className="adaptive-summary">
+          <div><strong>{category}</strong><span>performance</span></div>
+          <div><strong>{formatScorePercent(adaptive.score_percent)}</strong><span>current score</span></div>
+          <div><strong>{progress}</strong><span>answered</span></div>
+        </div>
+      )}
+
+      {!adaptive ? (
+        <EmptyState icon={Activity} title="Adaptive exam ready" body="Start a turn-by-turn assessment that adjusts difficulty after every answer." />
+      ) : adaptive.status === "completed" || !question ? (
+        <div className="adaptive-complete">
+          <CheckCircle2 size={28} />
+          <strong>Adaptive assessment complete</strong>
+          <span>{category} · {formatScorePercent(adaptive.score_percent)}</span>
+        </div>
+      ) : (
+        <form className="adaptive-question" onSubmit={submit}>
+          {lastAnswer && (
+            <div className={classNames("grade-feedback", lastAnswer.is_correct ? "correct" : "incorrect")}>
+              <span className={lastAnswer.is_correct ? "good-text" : "bad-text"}>
+                Previous answer: {lastAnswer.is_correct ? "Correct" : "Needs review"} · {lastAnswer.score}/100
+              </span>
+            </div>
+          )}
+          <div className="question-meta">
+            {question.topic_label && <span>{question.topic_label}</span>}
+            <span>{titleCase(question.difficulty || "medium")}</span>
+            <span>IRT b={question.irt_difficulty.toFixed(1)}</span>
+          </div>
+          <h3>{question.stem}</h3>
+          {question.choices?.length ? (
+            <div className="answer-options">
+              {question.choices.map((choice) => (
+                <label key={choice.label} className={answer === choice.label ? "selected" : ""}>
+                  <input
+                    type="radio"
+                    name={`adaptive-${question.id}`}
+                    value={choice.label}
+                    checked={answer === choice.label}
+                    onChange={() => setAnswer(choice.label)}
+                    disabled={busy}
+                  />
+                  <b>{choice.label}</b><span>{choice.text}</span>
+                </label>
+              ))}
+            </div>
+          ) : isCompletionQuestion(question.question_type) ? (
+            <input
+              className="one-word-answer"
+              value={answer}
+              onChange={(event) => setAnswer(event.target.value)}
+              placeholder="One-word answer"
+              disabled={busy}
+            />
+          ) : (
+            <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Write your answer" disabled={busy} />
+          )}
+          <div className="modal-actions">
+            <button className="button primary" type="submit" disabled={busy || !answer.trim()}>
+              {busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} Submit answer
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

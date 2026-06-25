@@ -49,6 +49,10 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::assessment::handler::start_justification,
         nexalearn_backend::assessment::handler::get_justification_status,
         nexalearn_backend::assessment::handler::stream_justification_events,
+        nexalearn_backend::assessment::adaptive::start_adaptive_exam,
+        nexalearn_backend::assessment::adaptive::start_course_adaptive_exam,
+        nexalearn_backend::assessment::adaptive::get_adaptive_exam,
+        nexalearn_backend::assessment::adaptive::submit_adaptive_answer,
         nexalearn_backend::chat::start_video_chat,
         nexalearn_backend::chat::send_chat_message,
         nexalearn_backend::chat::list_user_chats,
@@ -98,6 +102,11 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::UserExamAttemptResponse,
             nexalearn_backend::models::UserExamAttemptListResponse,
             nexalearn_backend::models::DeleteExamAttemptResponse,
+            nexalearn_backend::models::StartAdaptiveExamRequest,
+            nexalearn_backend::models::SubmitAdaptiveAnswerRequest,
+            nexalearn_backend::models::AdaptiveQuestionResponse,
+            nexalearn_backend::models::AdaptiveAnswerResponse,
+            nexalearn_backend::models::AdaptiveExamStatusResponse,
             nexalearn_backend::models::JustificationStatusResponse,
             nexalearn_backend::models::JustificationResponse,
             nexalearn_backend::models::TranscriptChatMessage,
@@ -240,8 +249,24 @@ async fn main() -> anyhow::Result<()> {
             get(assessment::handler::get_course_random_questions),
         )
         .route(
+            "/api/courses/:course_id/adaptive-exams/start",
+            post(assessment::adaptive::start_course_adaptive_exam),
+        )
+        .route(
             "/api/videos/:video_id/exams/start",
             post(assessment::handler::start_exam_attempt),
+        )
+        .route(
+            "/api/videos/:video_id/adaptive-exams/start",
+            post(assessment::adaptive::start_adaptive_exam),
+        )
+        .route(
+            "/api/adaptive-exams/:attempt_id",
+            get(assessment::adaptive::get_adaptive_exam),
+        )
+        .route(
+            "/api/adaptive-exams/:attempt_id/answer",
+            post(assessment::adaptive::submit_adaptive_answer),
         )
         .route(
             "/api/users/:user_id/exams",

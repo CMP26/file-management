@@ -376,6 +376,8 @@ pub struct SubmitAttemptResponse {
     pub is_waiting: bool,
     pub pending_count: i64,
     pub total_score: i32,
+    pub score_percent: Option<f64>,
+    pub performance_category: Option<String>,
     pub breakdown: Vec<AttemptBreakdownItem>,
 }
 
@@ -405,6 +407,8 @@ pub struct AttemptStatusResponse {
     pub status: String,
     pub is_waiting: bool,
     pub total_score: i32,
+    pub score_percent: Option<f64>,
+    pub performance_category: Option<String>,
     pub pending_count: i64,
     pub answers: Vec<AttemptAnswerStatusItem>,
 }
@@ -412,8 +416,9 @@ pub struct AttemptStatusResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UserExamAttemptResponse {
     pub attempt_id: Uuid,
+    pub assessment_type: String,
     pub user_id: Uuid,
-    pub video_id: Uuid,
+    pub video_id: Option<Uuid>,
     pub video_title: String,
     pub course_id: Uuid,
     pub course_title: String,
@@ -422,6 +427,8 @@ pub struct UserExamAttemptResponse {
     pub status: String,
     pub is_waiting: bool,
     pub total_score: i32,
+    pub score_percent: Option<f64>,
+    pub performance_category: Option<String>,
     pub pending_count: i64,
     pub answer_count: i64,
 }
@@ -429,6 +436,9 @@ pub struct UserExamAttemptResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UserExamAttemptListResponse {
     pub user_id: Uuid,
+    pub overall_score_percent: Option<f64>,
+    pub overall_category: Option<String>,
+    pub completed_assessment_count: i64,
     pub attempts: Vec<UserExamAttemptResponse>,
 }
 
@@ -436,6 +446,64 @@ pub struct UserExamAttemptListResponse {
 pub struct DeleteExamAttemptResponse {
     pub attempt_id: Uuid,
     pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct StartAdaptiveExamRequest {
+    pub user_id: Uuid,
+    pub max_questions: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AdaptiveQuestionResponse {
+    pub id: Uuid,
+    pub video_id: Uuid,
+    pub topic_id: Option<Uuid>,
+    pub topic_label: Option<String>,
+    pub stem: String,
+    pub question_type: String,
+    pub difficulty: Option<String>,
+    pub irt_difficulty: f64,
+    pub choices: Vec<QuestionChoiceResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AdaptiveAnswerResponse {
+    pub answer_id: Uuid,
+    pub question_id: Uuid,
+    pub question: Option<AdaptiveQuestionResponse>,
+    pub user_answer: String,
+    pub is_correct: bool,
+    pub score: i16,
+    pub ability_before: f64,
+    pub ability_after: f64,
+    pub item_difficulty: f64,
+    pub answered_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AdaptiveExamStatusResponse {
+    pub attempt_id: Uuid,
+    pub user_id: Uuid,
+    pub video_id: Option<Uuid>,
+    pub course_id: Uuid,
+    pub status: String,
+    pub ability_theta: f64,
+    pub standard_error: f64,
+    pub score_percent: Option<f64>,
+    pub performance_category: Option<String>,
+    pub max_questions: i32,
+    pub answered_count: i64,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub next_question: Option<AdaptiveQuestionResponse>,
+    pub answers: Vec<AdaptiveAnswerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SubmitAdaptiveAnswerRequest {
+    pub question_id: Uuid,
+    pub user_answer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -595,8 +663,11 @@ pub struct TopicLabelResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedChoice {
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub text: String,
+    #[serde(default)]
     pub is_correct: bool,
 }
 

@@ -1,6 +1,10 @@
 use crate::{
-    assessment::context::transcript_context_for_question, models::JustificationResponse, AppResult,
-    AppState,
+    assessment::{
+        context::transcript_context_for_question,
+        grader::{expected_completion_answer, is_completion_question},
+    },
+    models::JustificationResponse,
+    AppResult, AppState,
 };
 use uuid::Uuid;
 
@@ -37,6 +41,10 @@ pub async fn justification_for_answer(
             .rubric
             .clone()
             .unwrap_or_else(|| "No rubric was stored.".to_string())
+    } else if is_completion_question(&question.question_type) {
+        expected_completion_answer(question.rubric.as_deref())
+            .map(|answer| format!("Expected answer: {answer}"))
+            .unwrap_or_else(|| "Correct answer not available.".to_string())
     } else {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT label, text FROM choices WHERE question_id = $1 AND is_correct = true",

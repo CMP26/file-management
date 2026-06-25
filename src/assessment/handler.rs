@@ -1,5 +1,9 @@
 use crate::{
-    assessment::{grader::grade_answer, justifier::response_for_answer},
+    assessment::{
+        grader::grade_answer,
+        justifier::response_for_answer,
+        performance::{category_for_optional_score, score_percent},
+    },
     models::{
         AttemptAnswerRecord, AttemptAnswerStatusItem, AttemptStatusResponse, ChoiceRecord,
         CourseRandomQuestionResponse, CourseRandomQuestionsResponse, DeleteExamAttemptResponse,
@@ -63,6 +67,22 @@ struct UserExamAttemptRow {
     submitted_at: Option<chrono::DateTime<chrono::Utc>>,
     total_score: i32,
     pending_count: i64,
+    answer_count: i64,
+    graded_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct UserAdaptiveAttemptRow {
+    attempt_id: Uuid,
+    user_id: Uuid,
+    video_id: Option<Uuid>,
+    video_title: Option<String>,
+    course_id: Uuid,
+    course_title: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    status: String,
+    total_score: i32,
     answer_count: i64,
 }
 
@@ -317,7 +337,8 @@ pub async fn list_user_exam_attempts(
             ea.submitted_at,
             COALESCE(SUM(aa.score), 0)::INTEGER AS total_score,
             COUNT(aa.id) FILTER (WHERE aa.graded_at IS NULL)::BIGINT AS pending_count,
-            COUNT(aa.id)::BIGINT AS answer_count
+            COUNT(aa.id)::BIGINT AS answer_count,
+            COUNT(aa.score)::BIGINT AS graded_count
         FROM exam_attempts ea
         JOIN videos v ON v.id = ea.video_id
         JOIN courses c ON c.id = v.course_id
@@ -333,15 +354,46 @@ pub async fn list_user_exam_attempts(
     .fetch_all(&state.pool)
     .await?;
 
-    let attempts = rows
+    let adaptive_rows: Vec<UserAdaptiveAttemptRow> = sqlx::query_as(
+        r#"
+        SELECT
+            a.id AS attempt_id,
+            a.user_id,
+            a.video_id,
+            v.title AS video_title,
+            c.id AS course_id,
+            c.title AS course_title,
+            a.started_at,
+            a.completed_at,
+            a.status,
+            COALESCE(SUM(aa.score), 0)::INTEGER AS total_score,
+            COUNT(aa.id)::BIGINT AS answer_count
+        FROM adaptive_exam_attempts a
+        JOIN courses c ON c.id = a.course_id
+        LEFT JOIN videos v ON v.id = a.video_id
+        LEFT JOIN adaptive_exam_answers aa ON aa.attempt_id = a.id
+        WHERE a.user_id = $1
+          AND ($2::UUID IS NULL OR a.video_id = $2)
+        GROUP BY a.id, a.user_id, a.video_id, v.title, c.id, c.title, a.started_at, a.completed_at, a.status
+        ORDER BY a.started_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .bind(filters.video_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut attempts = rows
         .into_iter()
         .map(|row| {
             let (status, is_waiting) =
                 attempt_status_fields(row.submitted_at.is_some(), row.pending_count);
+            let score_percent = score_percent(row.total_score, row.graded_count);
             UserExamAttemptResponse {
                 attempt_id: row.attempt_id,
+                assessment_type: "batch".to_string(),
                 user_id: row.user_id,
-                video_id: row.video_id,
+                video_id: Some(row.video_id),
                 video_title: row.video_title,
                 course_id: row.course_id,
                 course_title: row.course_title,
@@ -350,13 +402,59 @@ pub async fn list_user_exam_attempts(
                 status: status.to_string(),
                 is_waiting,
                 total_score: row.total_score,
+                score_percent,
+                performance_category: category_for_optional_score(score_percent),
                 pending_count: row.pending_count,
                 answer_count: row.answer_count,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    Ok(Json(UserExamAttemptListResponse { user_id, attempts }))
+    attempts.extend(adaptive_rows.into_iter().map(|row| {
+        let score_percent = score_percent(row.total_score, row.answer_count);
+        UserExamAttemptResponse {
+            attempt_id: row.attempt_id,
+            assessment_type: "adaptive".to_string(),
+            user_id: row.user_id,
+            video_id: row.video_id,
+            video_title: row
+                .video_title
+                .unwrap_or_else(|| "Course adaptive assessment".to_string()),
+            course_id: row.course_id,
+            course_title: row.course_title,
+            started_at: row.started_at,
+            submitted_at: row.completed_at,
+            status: row.status.clone(),
+            is_waiting: row.status == "active",
+            total_score: row.total_score,
+            score_percent,
+            performance_category: category_for_optional_score(score_percent),
+            pending_count: 0,
+            answer_count: row.answer_count,
+        }
+    }));
+
+    attempts.sort_by(|left, right| right.started_at.cmp(&left.started_at));
+
+    let completed_scores = attempts
+        .iter()
+        .filter(|attempt| !attempt.is_waiting)
+        .filter_map(|attempt| attempt.score_percent)
+        .collect::<Vec<_>>();
+    let overall_score_percent = if completed_scores.is_empty() {
+        None
+    } else {
+        Some(completed_scores.iter().sum::<f64>() / completed_scores.len() as f64)
+    };
+    let overall_category = category_for_optional_score(overall_score_percent);
+
+    Ok(Json(UserExamAttemptListResponse {
+        user_id,
+        overall_score_percent,
+        overall_category,
+        completed_assessment_count: completed_scores.len() as i64,
+        attempts,
+    }))
 }
 
 #[utoipa::path(
@@ -377,13 +475,23 @@ pub async fn delete_user_exam_attempt(
     State(state): State<AppState>,
     Path((user_id, attempt_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<DeleteExamAttemptResponse>> {
-    let result = sqlx::query("DELETE FROM exam_attempts WHERE id = $1 AND user_id = $2")
+    let mut deleted = sqlx::query("DELETE FROM exam_attempts WHERE id = $1 AND user_id = $2")
         .bind(attempt_id)
         .bind(user_id)
         .execute(&state.pool)
-        .await?;
+        .await?
+        .rows_affected();
 
-    if result.rows_affected() == 0 {
+    if deleted == 0 {
+        deleted = sqlx::query("DELETE FROM adaptive_exam_attempts WHERE id = $1 AND user_id = $2")
+            .bind(attempt_id)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?
+            .rows_affected();
+    }
+
+    if deleted == 0 {
         return Err(AppError::not_found(format!(
             "attempt {attempt_id} was not found for user {user_id}"
         )));
@@ -488,6 +596,8 @@ pub async fn submit_attempt(
         is_waiting: true,
         pending_count: submitted_count,
         total_score: 0,
+        score_percent: None,
+        performance_category: None,
         breakdown: Vec::new(),
     }))
 }
@@ -815,6 +925,11 @@ async fn attempt_status_response(
         .filter_map(|answer| answer.score)
         .map(i32::from)
         .sum();
+    let graded_count = answers
+        .iter()
+        .filter(|answer| answer.score.is_some())
+        .count() as i64;
+    let score_percent = score_percent(total_score, graded_count);
     let (status, is_waiting) = attempt_status_fields(attempt.submitted_at.is_some(), pending_count);
 
     Ok(AttemptStatusResponse {
@@ -826,6 +941,8 @@ async fn attempt_status_response(
         status: status.to_string(),
         is_waiting,
         total_score,
+        score_percent,
+        performance_category: category_for_optional_score(score_percent),
         pending_count,
         answers: answers
             .into_iter()
