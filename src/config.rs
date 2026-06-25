@@ -103,3 +103,76 @@ fn env_or_u64(name: &str, default: u64) -> AppResult<u64> {
         Err(_) => Ok(default),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{env_or_f32, env_or_u64, env_or_usize, Config};
+    use crate::AppError;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn numeric_env_helpers_use_defaults_and_validate_ranges() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("NEXA_TEST_USIZE");
+        std::env::remove_var("NEXA_TEST_U64");
+        std::env::remove_var("NEXA_TEST_F32");
+
+        assert_eq!(env_or_usize("NEXA_TEST_USIZE", 3).unwrap(), 3);
+        assert_eq!(env_or_u64("NEXA_TEST_U64", 4).unwrap(), 4);
+        assert_eq!(env_or_f32("NEXA_TEST_F32", 0.7).unwrap(), 0.7);
+
+        std::env::set_var("NEXA_TEST_USIZE", "0");
+        std::env::set_var("NEXA_TEST_U64", "0");
+        std::env::set_var("NEXA_TEST_F32", "2.0");
+
+        assert!(matches!(
+            env_or_usize("NEXA_TEST_USIZE", 3),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            env_or_u64("NEXA_TEST_U64", 4),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            env_or_f32("NEXA_TEST_F32", 0.7),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn config_from_env_reads_required_and_default_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_required_env();
+        std::env::remove_var("RUSTFS_BUCKET");
+        std::env::remove_var("GEMMA_MAX_CONCURRENT_REQUESTS");
+        std::env::remove_var("SEMANTIC_CACHE_THRESHOLD");
+
+        let config = Config::from_env().unwrap();
+
+        assert_eq!(config.database_url, "postgres://example");
+        assert_eq!(config.rustfs_endpoint, "http://rustfs");
+        assert_eq!(config.rustfs_bucket, "nexalearn");
+        assert_eq!(config.gemma_max_concurrent_requests, 2);
+        assert_eq!(config.semantic_cache_threshold, 0.70);
+    }
+
+    #[test]
+    fn config_from_env_rejects_missing_database_url() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_required_env();
+        std::env::remove_var("DATABASE_URL");
+
+        let error = Config::from_env().unwrap_err();
+
+        assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    fn set_required_env() {
+        std::env::set_var("DATABASE_URL", "postgres://example");
+        std::env::set_var("RUSTFS_ENDPOINT", "http://rustfs");
+        std::env::set_var("RUSTFS_ACCESS_KEY", "access");
+        std::env::set_var("RUSTFS_SECRET_KEY", "secret");
+    }
+}

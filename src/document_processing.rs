@@ -219,7 +219,10 @@ fn vector_literal(embedding: &[f32]) -> AppResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::chunk_pages;
+    use super::{
+        chunk_pages, clean_page_text, vector_literal, CHUNK_OVERLAP_WORDS, TARGET_CHUNK_WORDS,
+    };
+    use crate::AppError;
 
     #[test]
     fn chunks_pdf_pages_without_losing_page_numbers() {
@@ -237,5 +240,46 @@ mod tests {
         assert_eq!(chunks[3].page_start, 1);
         assert_eq!(chunks[4].page_start, 2);
         assert!(chunks[1].content.starts_with("a3 a4"));
+    }
+
+    #[test]
+    fn clean_page_text_trims_trailing_space_and_outer_blank_lines() {
+        let cleaned = clean_page_text("\n  title  \nbody text   \n\n");
+
+        assert_eq!(cleaned, "title\nbody text");
+    }
+
+    #[test]
+    fn chunk_pages_skips_empty_pages_and_uses_default_overlap() {
+        let page = (0..(TARGET_CHUNK_WORDS + 20))
+            .map(|index| format!("w{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let chunks = chunk_pages(
+            &["".to_string(), page],
+            TARGET_CHUNK_WORDS,
+            CHUNK_OVERLAP_WORDS,
+        );
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].page_start, 2);
+        assert!(chunks[1]
+            .content
+            .starts_with(&format!("w{}", TARGET_CHUNK_WORDS - CHUNK_OVERLAP_WORDS)));
+    }
+
+    #[test]
+    fn vector_literal_validates_dimensions_and_finiteness() {
+        let vector = vector_literal(&vec![0.5; 768]).unwrap();
+        assert!(vector.starts_with("[0.5,0.5"));
+
+        assert!(matches!(vector_literal(&[0.1]), Err(AppError::External(_))));
+
+        let mut invalid = vec![0.0; 768];
+        invalid[0] = f32::INFINITY;
+        assert!(matches!(
+            vector_literal(&invalid),
+            Err(AppError::External(_))
+        ));
     }
 }

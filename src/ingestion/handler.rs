@@ -266,3 +266,50 @@ fn extension_from_content_type(content_type: &str) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        extension_from_content_type, extension_from_filename, extension_from_url,
+        MAX_REMOTE_MEDIA_BYTES,
+    };
+    use reqwest::Url;
+
+    #[test]
+    fn extension_from_filename_sanitizes_and_defaults() {
+        assert_eq!(extension_from_filename("lecture.MP4"), "mp4");
+        assert_eq!(extension_from_filename("archive.tar.gz"), "gz");
+        assert_eq!(extension_from_filename("no-extension"), "bin");
+        assert_eq!(extension_from_filename("bad.!@#"), "bin");
+    }
+
+    #[test]
+    fn extension_from_url_uses_last_path_segment() {
+        let url = Url::parse("https://example.com/media/video.webm?token=1").unwrap();
+        assert_eq!(extension_from_url(&url), Some("webm".to_string()));
+
+        let url = Url::parse("https://example.com/media/video").unwrap();
+        assert_eq!(extension_from_url(&url), None);
+    }
+
+    #[test]
+    fn extension_from_content_type_maps_known_media_types() {
+        assert_eq!(extension_from_content_type("video/mp4"), "mp4");
+        assert_eq!(
+            extension_from_content_type("video/webm; charset=utf-8"),
+            "webm"
+        );
+        assert_eq!(extension_from_content_type("video/quicktime"), "mov");
+        assert_eq!(extension_from_content_type("audio/mpeg"), "mp3");
+        assert_eq!(extension_from_content_type("audio/x-wav"), "wav");
+        assert_eq!(
+            extension_from_content_type("application/octet-stream"),
+            "bin"
+        );
+    }
+
+    #[test]
+    fn remote_media_limit_is_one_gib() {
+        assert_eq!(MAX_REMOTE_MEDIA_BYTES, 1024 * 1024 * 1024);
+    }
+}

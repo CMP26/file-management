@@ -198,3 +198,18 @@ impl From<CourseOverviewRow> for CourseResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::course_overview_sql;
+
+    #[test]
+    fn course_overview_counts_videos_documents_and_questions() {
+        let sql = course_overview_sql();
+
+        assert!(sql.contains("COUNT(DISTINCT v.id)::BIGINT AS video_count"));
+        assert!(sql.contains("COUNT(DISTINCT d.id)::BIGINT AS document_count"));
+        assert!(sql.contains("COUNT(DISTINCT q.id)::BIGINT AS question_count"));
+        assert!(sql.contains("ORDER BY c.created_at DESC"));
+    }
+}

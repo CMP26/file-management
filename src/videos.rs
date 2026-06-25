@@ -617,3 +617,45 @@ impl From<VideoOverviewRow> for VideoOverview {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{is_terminal_video_status, media_content_type, parse_byte_range};
+
+    #[test]
+    fn terminal_video_status_only_matches_ready_or_failed() {
+        assert!(is_terminal_video_status("ready"));
+        assert!(is_terminal_video_status("failed"));
+        assert!(!is_terminal_video_status("transcribing"));
+        assert!(!is_terminal_video_status("generating_questions"));
+    }
+
+    #[test]
+    fn parses_standard_and_suffix_byte_ranges() {
+        assert_eq!(parse_byte_range("bytes=2-5", 10), Some((2, 5)));
+        assert_eq!(parse_byte_range("bytes=7-", 10), Some((7, 9)));
+        assert_eq!(parse_byte_range("bytes=-3", 10), Some((7, 9)));
+    }
+
+    #[test]
+    fn rejects_invalid_byte_ranges() {
+        assert_eq!(parse_byte_range("items=0-4", 10), None);
+        assert_eq!(parse_byte_range("bytes=11-12", 10), None);
+        assert_eq!(parse_byte_range("bytes=5-2", 10), None);
+        assert_eq!(parse_byte_range("bytes=-0", 10), None);
+    }
+
+    #[test]
+    fn detects_media_type_from_signature_before_extension() {
+        let mut mp4 = vec![0, 0, 0, 18];
+        mp4.extend_from_slice(b"ftypisom");
+        assert_eq!(media_content_type("upload.bin", &mp4), "video/mp4");
+
+        assert_eq!(
+            media_content_type("upload.bin", &[0x1A, 0x45, 0xDF, 0xA3]),
+            "video/webm"
+        );
+        assert_eq!(media_content_type("movie.mov", &[]), "video/quicktime");
+        assert_eq!(media_content_type("audio.mp3", &[]), "audio/mpeg");
+    }
+}

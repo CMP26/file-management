@@ -313,3 +313,122 @@ where
 
     serde_json::from_str::<T>(trimmed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_json_output, GemmaClient};
+    use serde::Deserialize;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ParsedValue {
+        score: i32,
+    }
+
+    #[test]
+    fn parses_plain_fenced_and_embedded_json() {
+        assert_eq!(
+            parse_json_output::<ParsedValue>(r#"{"score": 7}"#).unwrap(),
+            ParsedValue { score: 7 }
+        );
+        assert_eq!(
+            parse_json_output::<ParsedValue>("```json\n{\"score\": 8}\n```").unwrap(),
+            ParsedValue { score: 8 }
+        );
+        assert_eq!(
+            parse_json_output::<ParsedValue>("Answer:\n{\"score\": 9}\nThanks").unwrap(),
+            ParsedValue { score: 9 }
+        );
+    }
+
+    #[test]
+    fn rejects_output_without_json() {
+        assert!(parse_json_output::<ParsedValue>("no json here").is_err());
+    }
+
+    #[test]
+    fn client_trims_base_url_and_keeps_model() {
+        let client = GemmaClient::new("http://localhost:8100///", "gemma-test", 1, 5);
+
+        assert_eq!(client.base_url(), "http://localhost:8100");
+        assert_eq!(client.model(), "gemma-test");
+    }
+
+    #[tokio::test]
+    async fn lists_model_ids_from_openai_compatible_endpoint() {
+        let base_url = start_mock_server(vec![json_response(
+            r#"{"data":[{"id":"gemma"},{"id":"other"}]}"#,
+        )])
+        .await;
+        let client = GemmaClient::new(&base_url, "gemma", 1, 5);
+
+        let models = client.list_model_ids().await.unwrap();
+
+        assert_eq!(models, vec!["gemma".to_string(), "other".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn generates_text_from_chat_completion_endpoint() {
+        let base_url = start_mock_server(vec![json_response(
+            r#"{"choices":[{"message":{"content":" answer "}}]}"#,
+        )])
+        .await;
+        let client = GemmaClient::new(&base_url, "gemma", 1, 5);
+
+        let output = client.generate("Say hi").await.unwrap();
+
+        assert_eq!(output, " answer ");
+    }
+
+    #[tokio::test]
+    async fn generate_json_parses_model_response() {
+        let base_url = start_mock_server(vec![json_response(
+            r#"{"choices":[{"message":{"content":"```json\n{\"score\":42}\n```"}}]}"#,
+        )])
+        .await;
+        let client = GemmaClient::new(&base_url, "gemma", 1, 5);
+
+        let parsed: ParsedValue = client.generate_json("grade").await.unwrap();
+
+        assert_eq!(parsed, ParsedValue { score: 42 });
+    }
+
+    #[tokio::test]
+    async fn retryable_status_is_retried() {
+        let base_url = start_mock_server(vec![
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n".to_string(),
+            json_response(r#"{"choices":[{"message":{"content":"ok"}}]}"#),
+        ])
+        .await;
+        let client = GemmaClient::new(&base_url, "gemma", 1, 5);
+
+        let output = client.generate("retry").await.unwrap();
+
+        assert_eq!(output, "ok");
+    }
+
+    async fn start_mock_server(responses: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                let _ = stream.read(&mut buffer).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn json_response(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+}

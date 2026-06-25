@@ -336,13 +336,8 @@ pub async fn list_user_exam_attempts(
     let attempts = rows
         .into_iter()
         .map(|row| {
-            let status = if row.submitted_at.is_none() {
-                "started"
-            } else if row.pending_count > 0 {
-                "grading"
-            } else {
-                "graded"
-            };
+            let (status, is_waiting) =
+                attempt_status_fields(row.submitted_at.is_some(), row.pending_count);
             UserExamAttemptResponse {
                 attempt_id: row.attempt_id,
                 user_id: row.user_id,
@@ -353,7 +348,7 @@ pub async fn list_user_exam_attempts(
                 started_at: row.started_at,
                 submitted_at: row.submitted_at,
                 status: status.to_string(),
-                is_waiting: row.submitted_at.is_some() && row.pending_count > 0,
+                is_waiting,
                 total_score: row.total_score,
                 pending_count: row.pending_count,
                 answer_count: row.answer_count,
@@ -453,12 +448,12 @@ pub async fn submit_attempt(
         .bind(answer_input.question_id)
         .fetch_one(&state.pool)
         .await?;
-        if question_course_id != attempt_course_id {
-            return Err(AppError::bad_request(format!(
-                "question {} from video {} does not belong to attempt course {}",
-                answer_input.question_id, question_video_id, attempt_course_id
-            )));
-        }
+        validate_question_course(
+            answer_input.question_id,
+            question_video_id,
+            question_course_id,
+            attempt_course_id,
+        )?;
 
         sqlx::query(
             r#"
@@ -820,13 +815,7 @@ async fn attempt_status_response(
         .filter_map(|answer| answer.score)
         .map(i32::from)
         .sum();
-    let status = if attempt.submitted_at.is_none() {
-        "started"
-    } else if pending_count > 0 {
-        "grading"
-    } else {
-        "graded"
-    };
+    let (status, is_waiting) = attempt_status_fields(attempt.submitted_at.is_some(), pending_count);
 
     Ok(AttemptStatusResponse {
         attempt_id,
@@ -835,7 +824,7 @@ async fn attempt_status_response(
         started_at: attempt.started_at,
         submitted_at: attempt.submitted_at,
         status: status.to_string(),
-        is_waiting: attempt.submitted_at.is_some() && pending_count > 0,
+        is_waiting,
         total_score,
         pending_count,
         answers: answers
@@ -941,6 +930,31 @@ async fn ensure_course_exists(state: &AppState, course_id: Uuid) -> AppResult<()
     }
 }
 
+fn attempt_status_fields(is_submitted: bool, pending_count: i64) -> (&'static str, bool) {
+    if !is_submitted {
+        ("started", false)
+    } else if pending_count > 0 {
+        ("grading", true)
+    } else {
+        ("graded", false)
+    }
+}
+
+fn validate_question_course(
+    question_id: Uuid,
+    question_video_id: Uuid,
+    question_course_id: Uuid,
+    attempt_course_id: Uuid,
+) -> AppResult<()> {
+    if question_course_id == attempt_course_id {
+        Ok(())
+    } else {
+        Err(AppError::bad_request(format!(
+            "question {question_id} from video {question_video_id} does not belong to attempt course {attempt_course_id}"
+        )))
+    }
+}
+
 async fn load_choice_map(
     state: &AppState,
     question_ids: &[Uuid],
@@ -967,4 +981,50 @@ async fn load_choice_map(
     }
 
     Ok(question_map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{attempt_status_fields, validate_question_course};
+    use crate::AppError;
+    use uuid::Uuid;
+
+    #[test]
+    fn attempt_status_started_is_not_waiting() {
+        assert_eq!(attempt_status_fields(false, 0), ("started", false));
+        assert_eq!(attempt_status_fields(false, 3), ("started", false));
+    }
+
+    #[test]
+    fn attempt_status_submitted_with_pending_grades_is_waiting() {
+        assert_eq!(attempt_status_fields(true, 2), ("grading", true));
+    }
+
+    #[test]
+    fn attempt_status_submitted_without_pending_grades_is_graded() {
+        assert_eq!(attempt_status_fields(true, 0), ("graded", false));
+    }
+
+    #[test]
+    fn question_bank_attempt_allows_questions_from_same_course() {
+        let question_id = Uuid::new_v4();
+        let question_video_id = Uuid::new_v4();
+        let course_id = Uuid::new_v4();
+
+        let result = validate_question_course(question_id, question_video_id, course_id, course_id);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn question_bank_attempt_rejects_questions_from_other_courses() {
+        let result = validate_question_course(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+    }
 }

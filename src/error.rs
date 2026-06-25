@@ -1,4 +1,8 @@
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -95,5 +99,47 @@ impl IntoResponse for AppError {
 impl From<&str> for AppError {
     fn from(value: &str) -> Self {
         Self::Other(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn maps_domain_errors_to_http_status_codes() {
+        assert_eq!(
+            AppError::bad_request("bad").status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            AppError::not_found("missing").status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            AppError::conflict("busy").status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            AppError::external("llm").status_code(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            AppError::other("oops").status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn maps_domain_errors_to_stable_error_codes() {
+        assert_eq!(AppError::bad_request("bad").error_code(), "bad_request");
+        assert_eq!(AppError::not_found("missing").error_code(), "not_found");
+        assert_eq!(AppError::conflict("busy").error_code(), "conflict");
+        assert_eq!(
+            AppError::external("llm").error_code(),
+            "external_service_error"
+        );
+        assert_eq!(AppError::other("oops").error_code(), "internal_error");
     }
 }

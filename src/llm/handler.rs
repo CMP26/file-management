@@ -1,7 +1,4 @@
-use crate::{
-    models::LlmStatusResponse,
-    AppResult, AppState,
-};
+use crate::{models::LlmStatusResponse, AppResult, AppState};
 use axum::{extract::State, Json};
 
 #[utoipa::path(

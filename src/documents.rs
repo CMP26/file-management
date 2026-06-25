@@ -350,3 +350,51 @@ impl From<DocumentRow> for DocumentResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{document_order, document_select, DocumentRow, MAX_PDF_BYTES};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn document_query_counts_chunks_and_orders_newest_first() {
+        assert!(document_select().contains("COUNT(dc.id)::BIGINT AS chunk_count"));
+        assert!(document_select().contains("LEFT JOIN document_chunks dc"));
+        assert_eq!(
+            document_order(),
+            "GROUP BY d.id, c.title ORDER BY d.created_at DESC"
+        );
+    }
+
+    #[test]
+    fn document_row_maps_to_response_without_losing_metadata() {
+        let now = Utc::now();
+        let row = DocumentRow {
+            id: Uuid::new_v4(),
+            course_id: Uuid::new_v4(),
+            course_title: "Course".to_string(),
+            title: "Guide".to_string(),
+            file_name: "guide.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            status: "ready".to_string(),
+            error_msg: None,
+            page_count: Some(12),
+            chunk_count: 7,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let response: crate::models::DocumentResponse = row.into();
+
+        assert_eq!(response.title, "Guide");
+        assert_eq!(response.file_name, "guide.pdf");
+        assert_eq!(response.page_count, Some(12));
+        assert_eq!(response.chunk_count, 7);
+    }
+
+    #[test]
+    fn pdf_upload_limit_is_one_hundred_mib() {
+        assert_eq!(MAX_PDF_BYTES, 100 * 1024 * 1024);
+    }
+}

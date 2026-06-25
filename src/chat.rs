@@ -1052,3 +1052,146 @@ fn embedding_vector_literal(embedding: &[f32]) -> AppResult<String> {
             .join(",")
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        chat_name, embedding_vector_literal, message_response_from_row, select_relevant_segments,
+        tokenize, ChatMessageRow, TranscriptSegment,
+    };
+    use crate::{models::TranscriptChatMessage, AppError};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn chat_name_defaults_trims_and_validates() {
+        assert_eq!(chat_name(None).unwrap(), "Untitled chat");
+        assert_eq!(chat_name(Some("  Exam prep  ")).unwrap(), "Exam prep");
+        assert!(matches!(
+            chat_name(Some("   ")),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            chat_name(Some(&"x".repeat(121))),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn tokenize_keeps_meaningful_ascii_terms_only() {
+        let tokens = tokenize("A Java-based Spark job, in JVM!");
+
+        assert!(tokens.contains("java"));
+        assert!(tokens.contains("based"));
+        assert!(tokens.contains("spark"));
+        assert!(tokens.contains("jvm"));
+        assert!(!tokens.contains("a"));
+        assert!(!tokens.contains("in"));
+    }
+
+    #[test]
+    fn select_relevant_segments_scores_message_and_recent_history() {
+        let segments = vec![
+            segment(0, "Java virtual machine overview"),
+            segment(1, "Spark transformations and actions"),
+            segment(2, "Hadoop storage layer"),
+        ];
+        let history = vec![TranscriptChatMessage {
+            role: "user".to_string(),
+            content: "Tell me about Spark".to_string(),
+        }];
+
+        let selected = select_relevant_segments("What are actions?", &history, &segments, 2);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].seq_index, 1);
+    }
+
+    #[test]
+    fn select_relevant_segments_falls_back_to_initial_segments() {
+        let segments = vec![
+            segment(0, "alpha beta"),
+            segment(1, "gamma delta"),
+            segment(2, "epsilon zeta"),
+        ];
+
+        let selected = select_relevant_segments("unmatched", &[], &segments, 2);
+
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|segment| segment.seq_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn message_response_parses_sources_and_cache_metadata() {
+        let message_id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let row = ChatMessageRow {
+            id: message_id,
+            role: "assistant".to_string(),
+            content: "Answer".to_string(),
+            sources_json: Some(
+                r#"[{"source_type":"transcript","seq_index":3,"start_s":1.0,"end_s":2.0,"text":"source"}]"#
+                    .to_string(),
+            ),
+            cached: true,
+            cache_similarity: Some(0.82),
+            created_at,
+        };
+
+        let response = message_response_from_row(row);
+
+        assert_eq!(response.id, message_id);
+        assert!(response.cached);
+        assert_eq!(response.cache_similarity, Some(0.82));
+        assert_eq!(response.sources.len(), 1);
+        assert_eq!(response.sources[0].seq_index, 3);
+    }
+
+    #[test]
+    fn message_response_ignores_invalid_sources_json() {
+        let row = ChatMessageRow {
+            id: Uuid::new_v4(),
+            role: "assistant".to_string(),
+            content: "Answer".to_string(),
+            sources_json: Some("not json".to_string()),
+            cached: false,
+            cache_similarity: None,
+            created_at: Utc::now(),
+        };
+
+        assert!(message_response_from_row(row).sources.is_empty());
+    }
+
+    #[test]
+    fn embedding_vector_literal_validates_dimension_and_finiteness() {
+        let embedding = vec![0.25; 768];
+        let literal = embedding_vector_literal(&embedding).unwrap();
+
+        assert!(literal.starts_with("[0.25,0.25"));
+        assert!(matches!(
+            embedding_vector_literal(&[0.1, 0.2]),
+            Err(AppError::External(_))
+        ));
+
+        let mut invalid = vec![0.0; 768];
+        invalid[10] = f32::NAN;
+        assert!(matches!(
+            embedding_vector_literal(&invalid),
+            Err(AppError::External(_))
+        ));
+    }
+
+    fn segment(seq_index: i32, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            seq_index,
+            start_s: f64::from(seq_index),
+            end_s: f64::from(seq_index + 1),
+            text: text.to_string(),
+        }
+    }
+}

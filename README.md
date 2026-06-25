@@ -200,7 +200,67 @@ http://localhost:8080/swagger-ui
 
 For the full backend endpoint reference, request/response examples, async operation contract, SSE streams, and transcript chat API, see `BACKEND_API.md`.
 
-### 6. Stop everything
+### 6. Run tests
+
+Run the Rust unit tests and any integration tests that do not need a database:
+
+```bash
+cargo test --all-targets
+```
+
+Most backend integration tests need PostgreSQL with pgvector. You can use the local Docker infrastructure database after running `./scripts/start-infra.sh`:
+
+```bash
+TEST_DATABASE_URL=postgres://nexalearn:nexalearn@localhost:5432/nexalearn \
+  cargo test --all-targets
+```
+
+If your normal development database is busy or you want an isolated test database, start a temporary pgvector container on port `55432`:
+
+```bash
+docker run --rm -d --name nexalearn-test-postgres \
+  -e POSTGRES_DB=nexalearn_test \
+  -e POSTGRES_USER=nexalearn \
+  -e POSTGRES_PASSWORD=nexalearn \
+  -p 55432:5432 \
+  pgvector/pgvector:pg16
+
+TEST_DATABASE_URL=postgres://nexalearn:nexalearn@localhost:55432/nexalearn_test \
+  cargo test --all-targets
+```
+
+The integration tests mock LLM, embedding, and Whisper HTTP services locally. They do not require llama.cpp, Gemma, Ollama, or the Whisper container.
+
+Run linting:
+
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+Measure coverage with `cargo-llvm-cov`:
+
+```bash
+cargo install cargo-llvm-cov
+
+TEST_DATABASE_URL=postgres://nexalearn:nexalearn@localhost:55432/nexalearn_test \
+  cargo llvm-cov --all-targets --summary-only
+```
+
+When you are done with the isolated test database, stop it:
+
+```bash
+docker stop nexalearn-test-postgres
+```
+
+Build the frontend:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+### 7. Stop everything
 
 Stop the host backend with `Ctrl+C`.
 
