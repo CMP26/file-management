@@ -56,11 +56,23 @@ pub async fn upload_video(
         }
     }
 
+    println!(
+        "Received upload request: title={:?}, course_id={:?}, file_size={:?} bytes, content_type={media_content_type}, extension={media_extension}",
+        title,
+        course_id,
+        video_bytes.as_ref().map(|b| b.len())
+    );
+
     let title = title.ok_or_else(|| AppError::bad_request("missing title field"))?;
     let course_id = course_id.ok_or_else(|| AppError::bad_request("missing course_id field"))?;
     let video_bytes = video_bytes.ok_or_else(|| AppError::bad_request("missing file field"))?;
 
     ensure_course_exists(&state, course_id).await?;
+
+    println!(
+        "Uploading video: title={title}, course_id={course_id}, size={} bytes, content_type={media_content_type}, extension={media_extension}",
+        video_bytes.len()
+    );
 
     let (video_id, _) = enqueue_video(
         &state,
@@ -71,6 +83,8 @@ pub async fn upload_video(
         media_extension,
     )
     .await?;
+
+    println!("Video uploaded and ingestion queued: video_id={video_id}, course_id={course_id}");
 
     Ok(Json(UploadResponse {
         video_id,
@@ -186,11 +200,29 @@ async fn enqueue_video(
     let video_id = Uuid::new_v4();
     let rustfs_key = format!("videos/{video_id}/original.{media_extension}");
 
-    state
+    println!(
+        "Enqueuing video for ingestion: video_id={video_id}, course_id={course_id}, size={} bytes, content_type={media_content_type}, extension={media_extension}",
+        video_bytes.len()
+    );
+    match state
         .storage
         .upload(&rustfs_key, video_bytes, &media_content_type)
-        .await?;
+        .await
+    {
+        Ok(_) => println!(
+            "Video uploaded successfully: video_id={video_id}, course_id={course_id}, rustfs_key={rustfs_key}"
+        ),
+        Err(error) => {
+            println!(
+                "Failed to upload video: video_id={video_id}, course_id={course_id}, rustfs_key={rustfs_key}, error={error}"
+            );
+            return Err(error);
+        }
+    }
 
+    println!(
+        "Video uploaded to storage: video_id={video_id}, course_id={course_id}, rustfs_key={rustfs_key}"
+    );
     sqlx::query(
         r#"
         INSERT INTO videos (id, course_id, title, rustfs_key, status)
@@ -204,12 +236,17 @@ async fn enqueue_video(
     .execute(&state.pool)
     .await?;
 
+    println!(
+        "Video record created in database: video_id={video_id}, course_id={course_id}, rustfs_key={rustfs_key}"
+    );
     let worker_state = state.clone();
     tokio::spawn(async move {
         if let Err(error) = crate::ingestion::worker::process_video(worker_state, video_id).await {
             tracing::error!(video_id = %video_id, error = %error, "ingestion worker failed");
         }
     });
+
+    println!("Ingestion worker spawned for video: video_id={video_id}, course_id={course_id}");
 
     let _ = state.video_events.send(video_id);
     Ok((video_id, rustfs_key))

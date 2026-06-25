@@ -7,6 +7,29 @@ const TARGET_CHUNK_WORDS: usize = 220;
 const CHUNK_OVERLAP_WORDS: usize = 40;
 const EMBEDDING_DIMENSIONS: usize = 768;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentProcessStage {
+    Extracting,
+    Embedding,
+}
+
+impl DocumentProcessStage {
+    pub fn as_status(self) -> &'static str {
+        match self {
+            Self::Extracting => "extracting",
+            Self::Embedding => "embedding",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" | "extracting" => Some(Self::Extracting),
+            "embedding" => Some(Self::Embedding),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DocumentChunk {
     seq_index: i32,
@@ -16,7 +39,15 @@ struct DocumentChunk {
 }
 
 pub async fn process_document(state: AppState, document_id: Uuid) -> AppResult<()> {
-    match process_document_inner(state.clone(), document_id).await {
+    process_document_from_stage(state, document_id, DocumentProcessStage::Extracting).await
+}
+
+pub async fn process_document_from_stage(
+    state: AppState,
+    document_id: Uuid,
+    stage: DocumentProcessStage,
+) -> AppResult<()> {
+    match process_document_inner(state.clone(), document_id, stage).await {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = error.to_string();
@@ -26,55 +57,133 @@ pub async fn process_document(state: AppState, document_id: Uuid) -> AppResult<(
     }
 }
 
-async fn process_document_inner(state: AppState, document_id: Uuid) -> AppResult<()> {
+pub async fn prepare_document_recovery(
+    state: &AppState,
+    document_id: Uuid,
+    stage: DocumentProcessStage,
+) -> AppResult<()> {
+    let course_id: Uuid = sqlx::query_scalar("SELECT course_id FROM documents WHERE id = $1")
+        .bind(document_id)
+        .fetch_one(&state.pool)
+        .await?;
+
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
+        .bind(document_id)
+        .execute(&mut *transaction)
+        .await?;
+    if stage == DocumentProcessStage::Extracting {
+        sqlx::query(
+            r#"
+            UPDATE documents
+            SET status = $1, error_msg = NULL, full_text = NULL,
+                page_count = NULL, updated_at = now()
+            WHERE id = $2
+            "#,
+        )
+        .bind(stage.as_status())
+        .bind(document_id)
+        .execute(&mut *transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+            UPDATE documents
+            SET status = $1, error_msg = NULL, updated_at = now()
+            WHERE id = $2
+            "#,
+        )
+        .bind(stage.as_status())
+        .bind(document_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query(
+        "DELETE FROM semantic_chat_cache WHERE video_id IN (SELECT id FROM videos WHERE course_id = $1)",
+    )
+    .bind(course_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    let _ = state.document_events.send(document_id);
+    Ok(())
+}
+
+pub async fn infer_document_recovery_stage(
+    state: &AppState,
+    document_id: Uuid,
+    status: &str,
+) -> AppResult<DocumentProcessStage> {
+    if let Some(stage) = DocumentProcessStage::parse(status) {
+        if stage == DocumentProcessStage::Extracting {
+            return Ok(stage);
+        }
+    }
+
+    let has_text: bool = sqlx::query_scalar(
+        "SELECT COALESCE(length(trim(full_text)) > 0, false) FROM documents WHERE id = $1",
+    )
+    .bind(document_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if has_text {
+        Ok(DocumentProcessStage::Embedding)
+    } else {
+        Ok(DocumentProcessStage::Extracting)
+    }
+}
+
+async fn process_document_inner(
+    state: AppState,
+    document_id: Uuid,
+    start_stage: DocumentProcessStage,
+) -> AppResult<()> {
     let tmp_dir = PathBuf::from(&state.config.tmp_dir);
     tokio::fs::create_dir_all(&tmp_dir).await?;
 
-    let (course_id, rustfs_key): (Uuid, String) =
-        sqlx::query_as("SELECT course_id, rustfs_key FROM documents WHERE id = $1")
-            .bind(document_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (course_id, rustfs_key, stored_full_text, stored_page_count): (
+        Uuid,
+        String,
+        Option<String>,
+        Option<i32>,
+    ) = sqlx::query_as(
+        "SELECT course_id, rustfs_key, full_text, page_count FROM documents WHERE id = $1",
+    )
+    .bind(document_id)
+    .fetch_one(&state.pool)
+    .await?;
     let pdf_path = tmp_dir.join(format!("{document_id}.pdf"));
 
-    update_status(&state, document_id, "extracting", None).await?;
-    let pdf_bytes = state.storage.download(&rustfs_key).await?;
-    tokio::fs::write(&pdf_path, pdf_bytes).await?;
-
-    let output = Command::new("pdftotext")
-        .arg("-layout")
-        .arg(&pdf_path)
-        .arg("-")
-        .output()
-        .await
-        .map_err(|error| AppError::external(format!("failed to start pdftotext: {error}")))?;
-    if !output.status.success() {
-        return Err(AppError::external(format!(
-            "pdftotext failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let extracted = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
-    let mut pages = extracted
-        .split('\u{000c}')
-        .map(clean_page_text)
-        .collect::<Vec<_>>();
-    while pages.last().is_some_and(|page| page.is_empty()) {
-        pages.pop();
-    }
-    let page_count = pages.len() as i32;
-    let full_text = pages
-        .iter()
-        .filter(|page| !page.is_empty())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if full_text.trim().is_empty() {
-        return Err(AppError::bad_request(
-            "the PDF contains no extractable text; scanned PDFs require OCR before upload",
-        ));
-    }
+    let (pages, full_text, page_count) = if start_stage == DocumentProcessStage::Extracting {
+        update_status(&state, document_id, "extracting", None).await?;
+        let pdf_bytes = state.storage.download(&rustfs_key).await?;
+        tokio::fs::write(&pdf_path, pdf_bytes).await?;
+        let (pages, full_text, page_count) = extract_pdf_text(&pdf_path).await?;
+        sqlx::query(
+            r#"
+            UPDATE documents
+            SET full_text = $1, page_count = $2, updated_at = now()
+            WHERE id = $3
+            "#,
+        )
+        .bind(&full_text)
+        .bind(page_count)
+        .bind(document_id)
+        .execute(&state.pool)
+        .await?;
+        (pages, full_text, page_count)
+    } else {
+        let full_text = stored_full_text
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::external("cannot resume document embedding without extracted text")
+            })?;
+        (
+            vec![full_text.clone()],
+            full_text,
+            stored_page_count.unwrap_or(1),
+        )
+    };
 
     let chunks = chunk_pages(&pages, TARGET_CHUNK_WORDS, CHUNK_OVERLAP_WORDS);
     if chunks.is_empty() {
@@ -141,6 +250,44 @@ async fn process_document_inner(state: AppState, document_id: Uuid) -> AppResult
     let _ = state.document_events.send(document_id);
     let _ = tokio::fs::remove_file(pdf_path).await;
     Ok(())
+}
+
+async fn extract_pdf_text(pdf_path: &std::path::Path) -> AppResult<(Vec<String>, String, i32)> {
+    let output = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(pdf_path)
+        .arg("-")
+        .output()
+        .await
+        .map_err(|error| AppError::external(format!("failed to start pdftotext: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::external(format!(
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let extracted = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let mut pages = extracted
+        .split('\u{000c}')
+        .map(clean_page_text)
+        .collect::<Vec<_>>();
+    while pages.last().is_some_and(|page| page.is_empty()) {
+        pages.pop();
+    }
+    let page_count = pages.len() as i32;
+    let full_text = pages
+        .iter()
+        .filter(|page| !page.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if full_text.trim().is_empty() {
+        return Err(AppError::bad_request(
+            "the PDF contains no extractable text; scanned PDFs require OCR before upload",
+        ));
+    }
+    Ok((pages, full_text, page_count))
 }
 
 async fn update_status(

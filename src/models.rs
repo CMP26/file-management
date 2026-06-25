@@ -196,6 +196,30 @@ pub struct DeleteDocumentResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RecoverUploadRequest {
+    pub mode: Option<String>,
+    pub stage: Option<String>,
+    pub include_ready: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RecoveredUploadItem {
+    pub id: Uuid,
+    pub kind: String,
+    pub title: String,
+    pub previous_status: String,
+    pub resume_stage: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RecoverUploadsResponse {
+    pub course_id: Option<Uuid>,
+    pub mode: String,
+    pub queued: Vec<RecoveredUploadItem>,
+    pub skipped: Vec<RecoveredUploadItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SourceVideoResponse {
     pub id: Uuid,
     pub title: String,

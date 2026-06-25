@@ -11,6 +11,7 @@ pub mod frontend;
 pub mod ingestion;
 pub mod llm;
 pub mod models;
+pub mod recovery;
 pub mod state;
 pub mod storage;
 pub mod videos;

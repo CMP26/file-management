@@ -35,7 +35,12 @@ impl RustFsClient {
             .body(ByteStream::from(data))
             .send()
             .await
-            .map_err(|error| AppError::other(error.to_string()))?;
+            .map_err(|error| {
+                AppError::external(format!(
+                    "rustfs put_object failed for bucket {} key {}: {error:?}",
+                    self.bucket, key
+                ))
+            })?;
 
         Ok(())
     }
@@ -48,12 +53,22 @@ impl RustFsClient {
             .key(key)
             .send()
             .await
-            .map_err(|error| AppError::other(error.to_string()))?;
+            .map_err(|error| {
+                AppError::external(format!(
+                    "rustfs get_object failed for bucket {} key {}: {error:?}",
+                    self.bucket, key
+                ))
+            })?;
         let bytes = response
             .body
             .collect()
             .await
-            .map_err(|error| AppError::other(error.to_string()))?
+            .map_err(|error| {
+                AppError::external(format!(
+                    "rustfs get_object body failed for bucket {} key {}: {error:?}",
+                    self.bucket, key
+                ))
+            })?
             .into_bytes();
         Ok(bytes.to_vec())
     }
@@ -65,7 +80,12 @@ impl RustFsClient {
             .key(key)
             .send()
             .await
-            .map_err(|error| AppError::other(error.to_string()))?;
+            .map_err(|error| {
+                AppError::external(format!(
+                    "rustfs delete_object failed for bucket {} key {}: {error:?}",
+                    self.bucket, key
+                ))
+            })?;
 
         Ok(())
     }
@@ -80,7 +100,12 @@ impl RustFsClient {
             .key(key)
             .presigned(presign_config)
             .await
-            .map_err(|error| AppError::other(error.to_string()))?;
+            .map_err(|error| {
+                AppError::external(format!(
+                    "rustfs presign failed for bucket {} key {}: {error:?}",
+                    self.bucket, key
+                ))
+            })?;
 
         Ok(request.uri().to_string())
     }

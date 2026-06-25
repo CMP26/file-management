@@ -13,8 +13,12 @@ use nexalearn_backend::{
     config::Config,
     courses::{create_course, delete_course, list_courses},
     db,
+    document_processing::{
+        infer_document_recovery_stage, prepare_document_recovery, DocumentProcessStage,
+    },
     documents::{delete_document, get_document, list_documents, DocumentFilters},
     embedding::OllamaEmbeddingClient,
+    ingestion::worker::{infer_video_recovery_stage, prepare_video_recovery, VideoProcessStage},
     llm::gemma::GemmaClient,
     models::{CreateCourseRequest, StartTranscriptChatRequest, TranscriptChatRequest},
     storage::rustfs::RustFsClient,
@@ -449,6 +453,111 @@ async fn document_delete_removes_chunks_and_invalidates_course_semantic_cache() 
         .await
         .expect_err("deleted document should be missing");
     assert!(matches!(missing, AppError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn recovery_prepares_video_and_document_from_resume_stage() {
+    let Some(ctx) = TestContext::new().await else {
+        return;
+    };
+
+    let course_id = insert_course(&ctx.state.pool, "Recovery integration").await;
+    let video_id = insert_video(&ctx.state.pool, course_id, "Recoverable lesson").await;
+    let transcript_id = insert_transcript(&ctx.state.pool, video_id).await;
+    insert_transcript_segment(
+        &ctx.state.pool,
+        transcript_id,
+        0,
+        0.0,
+        2.0,
+        "Recovery transcript",
+    )
+    .await;
+    let topic_id = insert_topic(&ctx.state.pool, video_id, "Recovery topic").await;
+    let question_id =
+        insert_question(&ctx.state.pool, video_id, Some(topic_id), "Old question?").await;
+    insert_choice(&ctx.state.pool, question_id, "A", true).await;
+    sqlx::query("INSERT INTO summaries (video_id, content) VALUES ($1, 'Old summary')")
+        .bind(video_id)
+        .execute(&ctx.state.pool)
+        .await
+        .expect("insert summary");
+    insert_semantic_cache_entry(&ctx.state.pool, video_id).await;
+    sqlx::query("UPDATE videos SET status = 'failed', error_msg = 'boom' WHERE id = $1")
+        .bind(video_id)
+        .execute(&ctx.state.pool)
+        .await
+        .expect("mark video failed");
+
+    let inferred = infer_video_recovery_stage(&ctx.state, video_id, "failed")
+        .await
+        .expect("infer video recovery stage");
+    assert_eq!(inferred, VideoProcessStage::Summarizing);
+
+    prepare_video_recovery(&ctx.state, video_id, VideoProcessStage::GeneratingQuestions)
+        .await
+        .expect("prepare video recovery");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM videos WHERE id = $1")
+        .bind(video_id)
+        .fetch_one(&ctx.state.pool)
+        .await
+        .expect("load video status");
+    assert_eq!(status, "generating_questions");
+    assert_count(&ctx.state.pool, "transcripts", "video_id", video_id, 1).await;
+    assert_count(&ctx.state.pool, "topics", "video_id", video_id, 1).await;
+    assert_count(&ctx.state.pool, "questions", "video_id", video_id, 0).await;
+    assert_count(&ctx.state.pool, "summaries", "video_id", video_id, 0).await;
+    assert_count(
+        &ctx.state.pool,
+        "semantic_chat_cache",
+        "video_id",
+        video_id,
+        0,
+    )
+    .await;
+
+    let document_id = insert_document(&ctx.state.pool, course_id, "Recoverable PDF").await;
+    sqlx::query("UPDATE documents SET status = 'failed', error_msg = 'embed failed', full_text = 'Saved extracted text', page_count = 4 WHERE id = $1")
+        .bind(document_id)
+        .execute(&ctx.state.pool)
+        .await
+        .expect("mark document failed with text");
+    insert_document_chunk(&ctx.state.pool, document_id).await;
+    insert_semantic_cache_entry(&ctx.state.pool, video_id).await;
+
+    let document_stage = infer_document_recovery_stage(&ctx.state, document_id, "failed")
+        .await
+        .expect("infer document recovery stage");
+    assert_eq!(document_stage, DocumentProcessStage::Embedding);
+
+    prepare_document_recovery(&ctx.state, document_id, DocumentProcessStage::Embedding)
+        .await
+        .expect("prepare document recovery");
+    let (document_status, full_text): (String, Option<String>) =
+        sqlx::query_as("SELECT status, full_text FROM documents WHERE id = $1")
+            .bind(document_id)
+            .fetch_one(&ctx.state.pool)
+            .await
+            .expect("load document");
+    assert_eq!(document_status, "embedding");
+    assert_eq!(full_text.as_deref(), Some("Saved extracted text"));
+    assert_count(
+        &ctx.state.pool,
+        "document_chunks",
+        "document_id",
+        document_id,
+        0,
+    )
+    .await;
+    assert_count(
+        &ctx.state.pool,
+        "semantic_chat_cache",
+        "video_id",
+        video_id,
+        0,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -919,6 +1028,16 @@ async fn insert_chat_message(pool: &PgPool, conversation_id: Uuid, role: &str, c
         .execute(pool)
         .await
         .expect("insert chat message");
+}
+
+async fn assert_count(pool: &PgPool, table: &str, column: &str, id: Uuid, expected: i64) {
+    let sql = format!("SELECT COUNT(*)::BIGINT FROM {table} WHERE {column} = $1");
+    let count: i64 = sqlx::query_scalar(&sql)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("count rows");
+    assert_eq!(count, expected, "unexpected count for {table}.{column}");
 }
 
 fn zero_vector_literal() -> String {

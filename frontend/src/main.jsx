@@ -26,6 +26,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Server,
@@ -96,6 +97,17 @@ function titleCase(value) {
   return String(value || "")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function canRecoverUpload(status) {
+  return status && status !== "ready";
+}
+
+function recoveryMessage(data) {
+  const queued = data.queued?.length || 0;
+  const skipped = data.skipped?.length || 0;
+  if (!queued) return skipped ? "Nothing needed recovery." : "No uploads were queued.";
+  return `Recovery queued for ${queued} upload${queued === 1 ? "" : "s"}.`;
 }
 
 function App() {
@@ -206,6 +218,48 @@ function App() {
       await api(`/api/courses/${course.id}`, { method: "DELETE" });
       await loadCore(true);
       notify("Course deleted.", "success");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const recoverCourse = async (course) => {
+    try {
+      const data = await api(`/api/courses/${course.id}/recover`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "resume" })
+      });
+      await loadCore(true);
+      notify(recoveryMessage(data), data.queued?.length ? "success" : "neutral");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const recoverLesson = async (video) => {
+    try {
+      const data = await api(`/api/videos/${video.id}/recover`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "resume" })
+      });
+      await loadCore(true);
+      notify(recoveryMessage(data), data.queued?.length ? "success" : "neutral");
+    } catch (error) {
+      notify(error.message, "danger");
+    }
+  };
+
+  const recoverDocument = async (document) => {
+    try {
+      const data = await api(`/api/documents/${document.id}/recover`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "resume" })
+      });
+      await loadCore(true);
+      notify(recoveryMessage(data), data.queued?.length ? "success" : "neutral");
     } catch (error) {
       notify(error.message, "danger");
     }
@@ -322,11 +376,14 @@ function App() {
               {view === "courses" && (
                 <CoursesView
                   courses={courses}
+                  documents={documents}
                   videos={videos}
                   createCourse={() => setCourseOpen(true)}
                   openStudyRoom={openStudyRoom}
                   deleteCourse={deleteCourse}
                   deleteLesson={deleteLesson}
+                  recoverCourse={recoverCourse}
+                  recoverLesson={recoverLesson}
                 />
               )}
               {view === "library" && (
@@ -337,6 +394,7 @@ function App() {
                   openUpload={() => setUploadOpen(true)}
                   refresh={() => loadCore(true)}
                   deleteLesson={deleteLesson}
+                  recoverLesson={recoverLesson}
                 />
               )}
               {view === "documents" && (
@@ -346,6 +404,7 @@ function App() {
                   openUpload={() => setDocumentUploadOpen(true)}
                   refresh={() => loadCore(true)}
                   notify={notify}
+                  recoverDocument={recoverDocument}
                 />
               )}
               {view === "question-bank" && (
@@ -367,6 +426,7 @@ function App() {
                   setSelectedVideoId={setSelectedVideoId}
                   refreshVideos={() => loadCore(true)}
                   notify={notify}
+                  recoverLesson={recoverLesson}
                   userId={studentId}
                   studentName={selectedStudent.name}
                 />
@@ -506,7 +566,17 @@ function StatItem({ label, value, icon: Icon, tone }) {
   );
 }
 
-function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCourse, deleteLesson }) {
+function CoursesView({
+  courses,
+  documents,
+  videos,
+  createCourse,
+  openStudyRoom,
+  deleteCourse,
+  deleteLesson,
+  recoverCourse,
+  recoverLesson
+}) {
   const [selectedCourseId, setSelectedCourseId] = useState(courses[0]?.id || null);
   useEffect(() => {
     if (!courses.some((course) => course.id === selectedCourseId)) {
@@ -515,6 +585,10 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
   }, [courses, selectedCourseId]);
   const selected = courses.find((course) => course.id === selectedCourseId);
   const lessons = videos.filter((video) => video.course_id === selectedCourseId);
+  const courseHasRecoverableUploads = selected && (
+    lessons.some((video) => canRecoverUpload(video.status))
+    || documents.some((document) => document.course_id === selected.id && canRecoverUpload(document.status))
+  );
 
   return (
     <div className="page-stack">
@@ -557,6 +631,11 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
                     <span><strong>{selected.document_count || 0}</strong> PDFs</span>
                     <span><strong>{selected.question_count}</strong> questions</span>
                   </div>
+                  {courseHasRecoverableUploads && (
+                    <button className="icon-button" onClick={() => recoverCourse(selected)} title="Resume failed or incomplete uploads">
+                      <RotateCcw size={17} />
+                    </button>
+                  )}
                   <button className="icon-button danger" onClick={() => deleteCourse(selected)} title="Delete course">
                     <Trash2 size={17} />
                   </button>
@@ -574,6 +653,11 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
                       <StatusPill status={video.status} />
                       <ChevronRight size={17} />
                     </button>
+                    {canRecoverUpload(video.status) && (
+                      <button className="icon-button row-recover" onClick={() => recoverLesson(video)} title="Resume processing">
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
                     <button className="icon-button danger row-delete" onClick={() => deleteLesson(video)} title="Delete lesson">
                       <Trash2 size={16} />
                     </button>
@@ -589,7 +673,7 @@ function CoursesView({ courses, videos, createCourse, openStudyRoom, deleteCours
   );
 }
 
-function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, deleteLesson }) {
+function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, deleteLesson, recoverLesson }) {
   const [query, setQuery] = useState("");
   const [courseId, setCourseId] = useState("");
   const [status, setStatus] = useState("");
@@ -632,6 +716,11 @@ function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, dele
               </button>
               <div className="tile-body">
                 <div><h3>{video.title}</h3><p>{formatDate(video.created_at)}</p></div>
+                {canRecoverUpload(video.status) && (
+                  <button className="icon-button tile-recover" onClick={() => recoverLesson(video)} title="Resume processing">
+                    <RotateCcw size={16} />
+                  </button>
+                )}
                 <button className="icon-button danger tile-delete" onClick={() => deleteLesson(video)} title="Delete lesson">
                   <Trash2 size={16} />
                 </button>
@@ -650,7 +739,7 @@ function LibraryView({ videos, courses, openStudyRoom, openUpload, refresh, dele
   );
 }
 
-function DocumentsView({ documents, courses, openUpload, refresh, notify }) {
+function DocumentsView({ documents, courses, openUpload, refresh, notify, recoverDocument }) {
   const [courseId, setCourseId] = useState("");
   const filtered = documents.filter((document) => !courseId || document.course_id === courseId);
 
@@ -693,6 +782,11 @@ function DocumentsView({ documents, courses, openUpload, refresh, notify }) {
               <a className="icon-button document-open" href={`${API_BASE}/api/documents/${document.id}/file`} target="_blank" rel="noreferrer" title="Open PDF">
                 <BookOpen size={16} />
               </a>
+              {canRecoverUpload(document.status) && (
+                <button className="icon-button" onClick={() => recoverDocument(document)} title="Resume processing">
+                  <RotateCcw size={16} />
+                </button>
+              )}
               <button className="icon-button danger" onClick={() => remove(document)} title="Delete document"><Trash2 size={16} /></button>
             </article>
           ))}
@@ -1088,7 +1182,7 @@ function AssessmentsView({ userId, studentName, openStudyRoom, notify }) {
   );
 }
 
-function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos, notify, userId, studentName }) {
+function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos, notify, recoverLesson, userId, studentName }) {
   const [detail, setDetail] = useState(null);
   const [transcript, setTranscript] = useState(null);
   const [tab, setTab] = useState("lesson");
@@ -1176,7 +1270,16 @@ function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos,
             </div>
 
             {tab === "lesson" && (
-              <LessonTab detail={detail} videoId={selectedVideoId} playerRef={playerRef} seek={seek} transcript={transcript} notify={notify} refreshVideos={refreshVideos} />
+              <LessonTab
+                detail={detail}
+                videoId={selectedVideoId}
+                playerRef={playerRef}
+                seek={seek}
+                transcript={transcript}
+                notify={notify}
+                refreshVideos={refreshVideos}
+                recoverLesson={recoverLesson}
+              />
             )}
             {tab === "transcript" && <TranscriptTab transcript={transcript} seek={seek} />}
             {tab === "chat" && <ChatTab videoId={selectedVideoId} playerRef={playerRef} notify={notify} userId={userId} studentName={studentName} />}
@@ -1188,7 +1291,7 @@ function StudyRoom({ videos, selectedVideoId, setSelectedVideoId, refreshVideos,
   );
 }
 
-function LessonTab({ detail, videoId, playerRef, seek, transcript, notify, refreshVideos }) {
+function LessonTab({ detail, videoId, playerRef, seek, transcript, notify, refreshVideos, recoverLesson }) {
   const remove = async () => {
     if (!window.confirm(`Delete "${detail.video.title}" and all generated data?`)) return;
     try {
@@ -1212,6 +1315,11 @@ function LessonTab({ detail, videoId, playerRef, seek, transcript, notify, refre
             <span>{detail.video.topic_count} topics</span>
             <span>{detail.video.question_count} questions</span>
           </div>
+          {canRecoverUpload(detail.video.status) && (
+            <button className="icon-button" onClick={() => recoverLesson(detail.video)} title="Resume processing">
+              <RotateCcw size={17} />
+            </button>
+          )}
           <button className="icon-button danger" onClick={remove} title="Delete lesson"><Trash2 size={17} /></button>
         </div>
         <section className="content-section">

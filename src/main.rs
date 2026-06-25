@@ -5,7 +5,7 @@ use axum::{
 };
 use nexalearn_backend::{
     assessment, chat, config::Config, courses, db, documents, embedding, frontend, ingestion, llm,
-    storage, videos, whisper, AppState,
+    recovery, storage, videos, whisper, AppState,
 };
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -19,12 +19,14 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::courses::list_courses,
         nexalearn_backend::courses::create_course,
         nexalearn_backend::courses::delete_course,
+        nexalearn_backend::recovery::recover_course_uploads,
         nexalearn_backend::documents::upload_document,
         nexalearn_backend::documents::list_documents,
         nexalearn_backend::documents::get_document,
         nexalearn_backend::documents::delete_document,
         nexalearn_backend::documents::stream_document_events,
         nexalearn_backend::documents::get_document_file,
+        nexalearn_backend::recovery::recover_document_upload,
         nexalearn_backend::videos::list_videos,
         nexalearn_backend::videos::get_video,
         nexalearn_backend::videos::stream_video_events,
@@ -32,6 +34,7 @@ use utoipa_swagger_ui::SwaggerUi;
         nexalearn_backend::videos::get_video_media,
         nexalearn_backend::videos::get_video_transcript,
         nexalearn_backend::videos::get_video_transcript_vtt,
+        nexalearn_backend::recovery::recover_video_upload,
         nexalearn_backend::ingestion::handler::upload_video,
         nexalearn_backend::ingestion::handler::import_mux_download_url,
         nexalearn_backend::assessment::handler::get_video_questions,
@@ -66,6 +69,9 @@ use utoipa_swagger_ui::SwaggerUi;
             nexalearn_backend::models::DocumentListResponse,
             nexalearn_backend::models::DocumentUploadResponse,
             nexalearn_backend::models::DeleteDocumentResponse,
+            nexalearn_backend::models::RecoverUploadRequest,
+            nexalearn_backend::models::RecoverUploadsResponse,
+            nexalearn_backend::models::RecoveredUploadItem,
             nexalearn_backend::models::SourceVideoResponse,
             nexalearn_backend::models::VideoOverview,
             nexalearn_backend::models::VideoListResponse,
@@ -113,6 +119,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Documents", description = "Course PDF upload, processing, and retrieval"),
         (name = "Videos", description = "Video catalog and processing status"),
         (name = "Ingestion", description = "Video upload and processing"),
+        (name = "Recovery", description = "Crash recovery and stage-aware reprocessing"),
         (name = "Mux", description = "Mux URL import integration"),
         (name = "Assessment", description = "Question retrieval, exam flow, grading, and justifications"),
         (name = "Chat", description = "Transcript-grounded chatbot responses")
@@ -157,11 +164,19 @@ async fn main() -> anyhow::Result<()> {
             "/api/courses/:course_id",
             axum::routing::delete(courses::delete_course),
         )
+        .route(
+            "/api/courses/:course_id/recover",
+            post(recovery::recover_course_uploads),
+        )
         .route("/api/documents", get(documents::list_documents))
         .route("/api/documents/upload", post(documents::upload_document))
         .route(
             "/api/documents/:document_id",
             get(documents::get_document).delete(documents::delete_document),
+        )
+        .route(
+            "/api/documents/:document_id/recover",
+            post(recovery::recover_document_upload),
         )
         .route(
             "/api/documents/:document_id/events",
@@ -175,6 +190,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/videos/:video_id",
             get(videos::get_video).delete(videos::delete_video),
+        )
+        .route(
+            "/api/videos/:video_id/recover",
+            post(recovery::recover_video_upload),
         )
         .route(
             "/api/videos/:video_id/events",

@@ -42,6 +42,8 @@ For client implementations, deserialize SSE events as the matching `GET` respons
 | Operation | Starter response | Source-of-truth / SSE response |
 |---|---|---|
 | Video upload/import processing | `UploadResponse` or `MuxImportDownloadUrlResponse` | `VideoDetailResponse` |
+| Document upload/recovery processing | `DocumentUploadResponse` or `RecoverUploadsResponse` | `DocumentResponse` |
+| Upload crash recovery | `RecoverUploadsResponse` | Existing video/document `GET` and SSE endpoints |
 | Transcript chat response generation | `TranscriptChatResponse` | `TranscriptChatHistoryResponse` |
 | Exam answer grading | `SubmitAttemptResponse` | `AttemptStatusResponse` |
 | Answer justification generation | `JustificationStatusResponse` from `/justification/start` | `JustificationStatusResponse` |
@@ -57,6 +59,7 @@ Current async streams:
 | Operation | Source-of-truth GET | Optional SSE | SSE event name | `data` JSON type | Stream closes when |
 |---|---|---|---|---|---|
 | Video upload/import processing | `GET /api/videos/{video_id}` | `GET /api/videos/{video_id}/events` | `video` | `VideoDetailResponse` | `video.status` is `ready` or `failed` |
+| Document upload processing | `GET /api/documents/{document_id}` | `GET /api/documents/{document_id}/events` | `document` | `DocumentResponse` | `status` is `ready` or `failed` |
 | Transcript chat response generation | `GET /api/users/{user_id}/chats/{conversation_id}` | `GET /api/users/{user_id}/chats/{conversation_id}/events` | `chat` | `TranscriptChatHistoryResponse` | `is_waiting` is `false` |
 | Exam answer grading | `GET /api/exams/{attempt_id}` | `GET /api/exams/{attempt_id}/events` | `exam` | `AttemptStatusResponse` | `is_waiting` is `false` |
 | Answer justification generation | `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/status` | `GET /api/exams/{attempt_id}/answers/{answer_id}/justification/events` | `justification` | `JustificationStatusResponse` | `is_waiting` is `false` |
@@ -188,6 +191,37 @@ Response:
 }
 ```
 
+### `POST /api/courses/{course_id}/recover`
+
+Queues crash recovery for every non-ready video and PDF in a course. The default `resume` mode infers the earliest safe stage from persisted artifacts. `full` clears generated artifacts and starts again from the original uploaded object.
+
+```bash
+curl -X POST http://localhost:8080/api/courses/7e9ceae3-6ab9-45dc-8f3d-b64df2c103669/recover \
+  -H "content-type: application/json" \
+  -d '{"mode":"resume"}'
+```
+
+Response:
+
+```json
+{
+  "course_id": "7e9ceae3-6ab9-45dc-8f3d-b64df2c103669",
+  "mode": "resume",
+  "queued": [
+    {
+      "id": "3aa9f8b2-cab5-41f6-9024-2b91533d1db0",
+      "kind": "video",
+      "title": "Demo lecture",
+      "previous_status": "failed",
+      "resume_stage": "generating_questions"
+    }
+  ],
+  "skipped": []
+}
+```
+
+Set `include_ready` to `true` only when you intentionally want to recover/rebuild ready uploads too.
+
 ## Videos
 
 Videos belong to a course through `videos.course_id`. Questions keep their source video through `questions.video_id`, so a course question can always be traced back to the video and transcript used for grading and justification.
@@ -236,6 +270,18 @@ Returns the original PDF for inline viewing and page citations.
 ### `DELETE /api/documents/{document_id}`
 
 Deletes the PDF, its chunks, and stale semantic answers associated with lessons in that course.
+
+### `POST /api/documents/{document_id}/recover`
+
+Queues one PDF for recovery. In `resume` mode, a document with saved extracted text resumes at `embedding`; otherwise it restarts at `extracting`.
+
+```bash
+curl -X POST http://localhost:8080/api/documents/661ce988-9827-40e1-a5a6-e7f76bb17235/recover \
+  -H "content-type: application/json" \
+  -d '{"mode":"resume"}'
+```
+
+Optional `stage` override values are `extracting` and `embedding`.
 
 ### `GET /api/videos`
 
@@ -432,6 +478,25 @@ Response:
   "deleted": true
 }
 ```
+
+### `POST /api/videos/{video_id}/recover`
+
+Queues one lesson for crash recovery from the original uploaded media or from the latest persisted stage.
+
+```bash
+curl -X POST http://localhost:8080/api/videos/3aa9f8b2-cab5-41f6-9024-2b91533d1db0/recover \
+  -H "content-type: application/json" \
+  -d '{"mode":"resume"}'
+```
+
+Modes:
+
+| Mode | Behavior |
+|---|---|
+| `resume` | Infers the next safe stage from persisted transcript/topics/questions/summary. |
+| `full` | Deletes generated transcript/topics/questions/summary/cache and starts from audio extraction. |
+
+Optional `stage` override values are `extracting_audio`, `transcribing`, `labeling_topics`, `generating_questions`, and `summarizing`. `transcribing` restarts from audio extraction because extracted WAV files are temporary and not durable.
 
 ### `GET /api/videos/{video_id}/media`
 

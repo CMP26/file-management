@@ -843,7 +843,7 @@ p {
 
 .content-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) repeat(2, 36px);
   min-height: 62px;
   align-items: center;
   gap: 6px;
@@ -866,7 +866,8 @@ p {
   text-align: left;
 }
 
-.content-row .row-delete {
+.content-row .row-delete,
+.content-row .row-recover {
   width: 32px;
   height: 32px;
 }
@@ -1015,13 +1016,14 @@ textarea::placeholder {
 
 .tile-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) repeat(2, 32px);
   align-items: center;
   gap: 9px;
   padding: 13px 13px 10px;
 }
 
-.tile-delete {
+.tile-delete,
+.tile-recover {
   width: 32px;
   height: 32px;
 }
@@ -1724,7 +1726,7 @@ textarea::placeholder {
 
 .document-row {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto 36px 36px;
+  grid-template-columns: 38px minmax(0, 1fr) auto repeat(3, 36px);
   min-height: 68px;
   align-items: center;
   gap: 10px;
